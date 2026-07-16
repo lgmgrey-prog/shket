@@ -96,6 +96,12 @@ export interface DbBroadcast {
   createdAt: string;
 }
 
+export interface BotMessageTemplate {
+  text: string;
+  mediaUrl?: string;
+  buttons?: { text: string; url: string }[];
+}
+
 export interface DbSettings {
   requiredChannelUrl: string;
   requiredChannelName: string;
@@ -119,6 +125,12 @@ export interface DbSettings {
   grokApiKey?: string;
   grokModel?: string;
   geminiApiKey?: string;
+  geminiBaseUrl?: string;
+  startMsg?: BotMessageTemplate;
+  groupMsg?: BotMessageTemplate;
+  subMsg?: BotMessageTemplate;
+  totalGdzSolved?: number;
+  totalMessagesChat?: number;
 }
 
 export interface DbSchema {
@@ -422,7 +434,7 @@ export class Database {
           payments: parsed.payments || defaultPayments,
           broadcasts: parsed.broadcasts || [],
           messages: parsed.messages || {},
-          settings: parsed.settings || {
+          settings: {
             requiredChannelUrl: "https://t.me/shket_official",
             requiredChannelName: "ШкЕТ Official",
             freeMessagesLimit: 10,
@@ -438,13 +450,29 @@ export class Database {
             tgBotToken: "",
             tgBotUsername: "",
             tgWebhookUrl: "",
-                        yookassaShopId: "",
+            yookassaShopId: "",
             yookassaSecretKey: "",
             yookassaEnabled: false,
             aiProvider: "gemini",
             grokApiKey: "",
             grokModel: "grok-2-1212",
             geminiApiKey: "",
+            startMsg: {
+              text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
+              mediaUrl: "",
+              buttons: []
+            },
+            groupMsg: {
+              text: "Всем ку! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут в чате. Отправьте фото или напишите вопрос, тегнув меня!",
+              mediaUrl: "",
+              buttons: []
+            },
+            subMsg: {
+              text: "⚠️ **ОБЯЗАТЕЛЬНАЯ ПОДПИСКА (ОП)**\n\nЧтобы пользоваться ботом НейроШкЕТ, тебе нужно подписаться на наш спонсорский канал:\n\n👉 **{channel_name}**\n\nПодпишись и нажми кнопку ниже, чтобы начать!",
+              mediaUrl: "",
+              buttons: []
+            },
+            ...parsed.settings
           },
         };
       }
@@ -502,13 +530,30 @@ export class Database {
         tgBotToken: "",
         tgBotUsername: "",
         tgWebhookUrl: "",
-                yookassaShopId: "",
+        yookassaShopId: "",
         yookassaSecretKey: "",
         yookassaEnabled: false,
         aiProvider: "gemini",
         grokApiKey: "",
         grokModel: "grok-2-1212",
         geminiApiKey: "",
+        totalGdzSolved: 150,
+        totalMessagesChat: 1200,
+        startMsg: {
+          text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
+          mediaUrl: "",
+          buttons: []
+        },
+        groupMsg: {
+          text: "Всем ку! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут в чате. Отправьте фото или напишите вопрос, тегнув меня!",
+          mediaUrl: "",
+          buttons: []
+        },
+        subMsg: {
+          text: "⚠️ **ОБЯЗАТЕЛЬНАЯ ПОДПИСКА (ОП)**\n\nЧтобы пользоваться ботом НейроШкЕТ, тебе нужно подписаться на наш спонсорский канал:\n\n👉 **{channel_name}**\n\nПодпишись и нажми кнопку ниже, чтобы начать!",
+          mediaUrl: "",
+          buttons: []
+        }
       },
     };
     this.save(initialDb);
@@ -715,11 +760,38 @@ export class Database {
       text,
       timestamp: new Date().toISOString(),
     });
+    this.incrementTotalMessagesChat();
     this.save();
   }
 
   public clearMessages(userId: string): void {
     this.data.messages[userId] = [];
+    this.save();
+  }
+
+  public getAllMessagesCount(): number {
+    let total = 0;
+    for (const userId in this.data.messages) {
+      if (Array.isArray(this.data.messages[userId])) {
+        total += this.data.messages[userId].length;
+      }
+    }
+    return total;
+  }
+
+  public incrementTotalGdzSolved(): void {
+    if (this.data.settings.totalGdzSolved === undefined) {
+      this.data.settings.totalGdzSolved = 150;
+    }
+    this.data.settings.totalGdzSolved += 1;
+    this.save();
+  }
+
+  public incrementTotalMessagesChat(): void {
+    if (this.data.settings.totalMessagesChat === undefined) {
+      this.data.settings.totalMessagesChat = 1200;
+    }
+    this.data.settings.totalMessagesChat += 1;
     this.save();
   }
 

@@ -767,6 +767,32 @@ async function startServer() {
       let text = message.text || "";
       const botUser = settings.tgBotUsername || "NeuroShketBot";
 
+      // Check if bot is added to a group
+      if (message.new_chat_members && Array.isArray(message.new_chat_members)) {
+        const isBotAdded = message.new_chat_members.some((m: any) => m.username && String(m.username).toLowerCase() === botUser.toLowerCase());
+        if (isBotAdded) {
+          let welcomeText = settings.groupMsg?.text || "Всем ку! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут в чате. Отправьте фото или напишите вопрос, тегнув меня!";
+          welcomeText = welcomeText.replace(/{bot_username}/g, botUser);
+
+          const rows: any[][] = [];
+          if (settings.groupMsg?.buttons && settings.groupMsg.buttons.length > 0) {
+            for (let i = 0; i < settings.groupMsg.buttons.length; i += 2) {
+              const pair = settings.groupMsg.buttons.slice(i, i + 2);
+              rows.push(pair.map(b => ({ text: b.text, url: b.url })));
+            }
+          }
+          const inlineKeyboard = rows.length > 0 ? { inline_keyboard: rows } : undefined;
+          const extra = inlineKeyboard ? { reply_markup: inlineKeyboard } : {};
+
+          if (settings.groupMsg?.mediaUrl && settings.groupMsg.mediaUrl.trim().startsWith("http")) {
+            await sendTelegramPhoto(token, chatId, settings.groupMsg.mediaUrl.trim(), welcomeText, extra);
+          } else {
+            await sendTelegramMessage(token, chatId, welcomeText, extra);
+          }
+          return;
+        }
+      }
+
       // Clean bot suffix from group commands (e.g. /start@NeuroShketBot -> /start)
       if (text) {
         const suffix = `@${botUser}`;
@@ -856,16 +882,30 @@ async function startServer() {
       if (settings.requiredChannelUrl && !isStartCmd && !user.isPremium) {
         const isSubbed = await isSubscribedToRequiredChannel(token, userId);
         if (!isSubbed) {
-          const inlineKeyboard = {
-            inline_keyboard: [
-              [{ text: `📢 Подписаться на ${settings.requiredChannelName || "канал"}`, url: settings.requiredChannelUrl, style: "primary" }],
-              [{ text: "✅ Я подписался (Проверить)", callback_data: "check_subscription_status", style: "success" }]
-            ]
-          };
-          await sendTelegramMessage(token, chatId, `⚠️ **ОБЯЗАТЕЛЬНАЯ ПОДПИСКА (ОП)**\n\nЧтобы пользоваться ботом НейроШкЕТ, тебе нужно подписаться на наш спонсорский канал:\n\n👉 **${settings.requiredChannelName || "Наш Канал"}**\n\nПодпишись и нажми кнопку ниже, чтобы начать!`, {
-            reply_markup: inlineKeyboard,
-            parse_mode: "Markdown"
-          });
+          let subText = settings.subMsg?.text || `⚠️ **ОБЯЗАТЕЛЬНАЯ ПОДПИСКА (ОП)**\n\nЧтобы пользоваться ботом НейроШкЕТ, тебе нужно подписаться на наш спонсорский канал:\n\n👉 **{channel_name}**\n\nПодпишись и нажми кнопку ниже, чтобы начать!`;
+          subText = subText.replace(/{channel_name}/g, settings.requiredChannelName || "Наш Канал");
+          subText = subText.replace(/{channel_url}/g, settings.requiredChannelUrl);
+
+          const rows: any[][] = [];
+          rows.push([{ text: `📢 Подписаться на ${settings.requiredChannelName || "канал"}`, url: settings.requiredChannelUrl, style: "primary" }]);
+          
+          if (settings.subMsg?.buttons && settings.subMsg.buttons.length > 0) {
+            for (let i = 0; i < settings.subMsg.buttons.length; i += 2) {
+              const pair = settings.subMsg.buttons.slice(i, i + 2);
+              rows.push(pair.map(b => ({ text: b.text, url: b.url })));
+            }
+          }
+          
+          rows.push([{ text: "✅ Я подписался (Проверить)", callback_data: "check_subscription_status", style: "success" }]);
+
+          const inlineKeyboard = { inline_keyboard: rows };
+          const extra: any = { reply_markup: inlineKeyboard, parse_mode: "Markdown" };
+
+          if (settings.subMsg?.mediaUrl && settings.subMsg.mediaUrl.trim().startsWith("http")) {
+            await sendTelegramPhoto(token, chatId, settings.subMsg.mediaUrl.trim(), subText, extra);
+          } else {
+            await sendTelegramMessage(token, chatId, subText, extra);
+          }
           return;
         }
       }
@@ -940,6 +980,7 @@ async function startServer() {
 
             // Solve homework!
             const solution = await solveHomework(base64Image);
+            dbInstance.incrementTotalGdzSolved();
 
             // Append dynamic GDZ ads if any
             let finalReply = solution;
@@ -1058,12 +1099,9 @@ async function startServer() {
           }
         });
 
-        let greeting = `Здорово! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\n` +
-          `🎒 Панель управления НейроШкЕТа 🎒\n` +
-          `Выбирай нужную функцию прямо на кнопках:`;
+        let greeting = settings.startMsg?.text || `Здорово! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\n🎒 Панель управления НейроШкЕТа 🎒\nВыбирай нужную функцию прямо на кнопках:`;
 
-        // Interactive inline menu with 3 key features in 2 rows using Telegram Bot API 9.4 styles
-        const inlineKeyboard = {
+        let inlineKeyboard = {
           inline_keyboard: [
             [
               { text: "🎒 Решить ГДЗ", callback_data: "cmd_gdz", style: "danger" },
@@ -1075,7 +1113,22 @@ async function startServer() {
           ]
         };
 
-        await sendTelegramMessage(token, chatId, greeting, { reply_markup: inlineKeyboard, parse_mode: "Markdown" });
+        if (settings.startMsg?.buttons && settings.startMsg.buttons.length > 0) {
+          const rows: any[][] = [];
+          for (let i = 0; i < settings.startMsg.buttons.length; i += 2) {
+            const pair = settings.startMsg.buttons.slice(i, i + 2);
+            rows.push(pair.map(b => ({ text: b.text, url: b.url })));
+          }
+          inlineKeyboard = { inline_keyboard: rows };
+        }
+
+        const extra: any = { reply_markup: inlineKeyboard, parse_mode: "Markdown" };
+
+        if (settings.startMsg?.mediaUrl && settings.startMsg.mediaUrl.trim().startsWith("http")) {
+          await sendTelegramPhoto(token, chatId, settings.startMsg.mediaUrl.trim(), greeting, extra);
+        } else {
+          await sendTelegramMessage(token, chatId, greeting, extra);
+        }
 
         // Handle Pinned Sponsor Message advertisement if configured
         try {
@@ -2043,6 +2096,7 @@ async function startServer() {
 
     // Solve GDZ
     const solution = await solveHomework(image);
+    dbInstance.incrementTotalGdzSolved();
 
     // Track active GDZ ad (position: gdz)
     let adToShow = null;
@@ -2288,12 +2342,16 @@ async function startServer() {
     });
 
     // Solve GDZ stats - sum up daily limits or total actions
-    const totalGdzSolved = users.reduce((sum, u) => sum + u.gdzToday, 0) + 150; // add mock base historical solved
-    const totalMessagesChat = users.reduce((sum, u) => sum + u.messagesToday, 0) + 1200; // add mock base historical chats
+    const settingsObj = dbInstance.getSettings();
+    const totalGdzSolved = settingsObj.totalGdzSolved || 0;
+    const totalMessagesChat = dbInstance.getAllMessagesCount();
 
-    // DAU/MAU stats (Simulated based on registered users)
-    const dau = Math.min(totalUsers, Math.max(2, Math.floor(totalUsers * 0.45)));
-    const mau = Math.min(totalUsers, Math.max(5, Math.floor(totalUsers * 0.85)));
+    // DAU/MAU stats (100% real based on user activity)
+    const now = Date.now();
+    const oneDayMs = 24 * 60 * 60 * 1000;
+    const thirtyDaysMs = 30 * oneDayMs;
+    const dau = users.filter((u) => u.lastMessageAt && (now - new Date(u.lastMessageAt).getTime()) <= oneDayMs).length;
+    const mau = users.filter((u) => u.lastMessageAt && (now - new Date(u.lastMessageAt).getTime()) <= thirtyDaysMs).length;
 
     res.json({
       totalUsers,

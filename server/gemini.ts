@@ -4,23 +4,30 @@ import { dbInstance } from "./db.js";
 let aiInstance: GoogleGenAI | null = null;
 
 let currentApiKey: string | undefined = undefined;
+let currentBaseUrl: string | undefined = undefined;
 
 export function getGeminiClient(): GoogleGenAI {
   const settings = dbInstance.getSettings();
   const apiKey = settings?.geminiApiKey || process.env.GEMINI_API_KEY;
+  const baseUrl = settings?.geminiBaseUrl || process.env.GEMINI_BASE_URL;
   if (!apiKey) {
     throw new Error("GEMINI_API_KEY is not configured in settings or environment variables");
   }
 
-  if (!aiInstance || currentApiKey !== apiKey) {
+  if (!aiInstance || currentApiKey !== apiKey || currentBaseUrl !== baseUrl) {
     currentApiKey = apiKey;
+    currentBaseUrl = baseUrl;
+    const httpOpts: any = {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
+    };
+    if (baseUrl) {
+      httpOpts.baseUrl = baseUrl.trim();
+    }
     aiInstance = new GoogleGenAI({
       apiKey: apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
+      httpOptions: httpOpts,
     });
   }
   return aiInstance;
@@ -480,20 +487,25 @@ export async function chatWithVoiceOrVideo(
  */
 export async function testAiConnection(
   provider: "gemini" | "grok",
-  config: { geminiApiKey?: string; grokApiKey?: string; grokModel?: string }
+  config: { geminiApiKey?: string; geminiBaseUrl?: string; grokApiKey?: string; grokModel?: string }
 ): Promise<string> {
   if (provider === "gemini") {
     const apiKey = config.geminiApiKey || process.env.GEMINI_API_KEY;
+    const baseUrl = config.geminiBaseUrl || process.env.GEMINI_BASE_URL;
     if (!apiKey) {
       throw new Error("Ключ GEMINI_API_KEY не задан ни в настройках, ни в переменных окружения (.env)");
     }
+    const httpOpts: any = {
+      headers: {
+        "User-Agent": "aistudio-build",
+      },
+    };
+    if (baseUrl) {
+      httpOpts.baseUrl = baseUrl.trim();
+    }
     const testAi = new GoogleGenAI({
       apiKey: apiKey,
-      httpOptions: {
-        headers: {
-          "User-Agent": "aistudio-build",
-        },
-      },
+      httpOptions: httpOpts,
     });
     const response = await testAi.models.generateContent({
       model: "gemini-3.5-flash",

@@ -31,7 +31,8 @@ import {
   Eye,
   CreditCard,
   ToggleLeft,
-  ToggleRight
+  ToggleRight,
+  MessageSquare
 } from "lucide-react";
 import { DbUser, DbStyle, DbAd, DbCampaign, DbPayment, DbBroadcast, DbSettings, SystemStats, AdminStats, SystemLog } from "../types";
 
@@ -40,7 +41,25 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<"stats" | "users" | "styles" | "ads" | "broadcasts" | "system" | "logs">("stats");
+  const [activeTab, setActiveTab] = useState<"stats" | "users" | "styles" | "ads" | "broadcasts" | "system" | "logs" | "templates">("stats");
+
+  // Auth states
+  const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
+    return sessionStorage.getItem("admin_authenticated") === "true";
+  });
+  const [loginUsername, setLoginUsername] = useState("");
+  const [loginPassword, setLoginPassword] = useState("");
+  const [loginError, setLoginError] = useState("");
+
+  // Template button inputs
+  const [startButtonText, setStartButtonText] = useState("");
+  const [startButtonUrl, setStartButtonUrl] = useState("");
+
+  const [groupButtonText, setGroupButtonText] = useState("");
+  const [groupButtonUrl, setGroupButtonUrl] = useState("");
+
+  const [subButtonText, setSubButtonText] = useState("");
+  const [subButtonUrl, setSubButtonUrl] = useState("");
 
   // Admin Data states
   const [stats, setStats] = useState<AdminStats | null>(null);
@@ -118,6 +137,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
           provider,
           config: {
             geminiApiKey: settings.geminiApiKey,
+            geminiBaseUrl: settings.geminiBaseUrl,
             grokApiKey: settings.grokApiKey,
             grokModel: settings.grokModel,
           },
@@ -561,6 +581,86 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
     return filtered.reduce((sum, p) => sum + p.amount, 0);
   };
 
+  // Auth Form handler
+  const handleLoginSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (loginUsername === "admin" && loginPassword === "G4JG48fe5J#!") {
+      setIsAuthenticated(true);
+      sessionStorage.setItem("admin_authenticated", "true");
+      setLoginError("");
+    } else {
+      setLoginError("Неверный логин или пароль!");
+    }
+  };
+
+  // Template customizers
+  const updateTemplateText = (type: "startMsg" | "groupMsg" | "subMsg", value: string) => {
+    if (!settings) return;
+    const current = settings[type] || { text: "", mediaUrl: "", buttons: [] };
+    setSettings({
+      ...settings,
+      [type]: {
+        ...current,
+        text: value
+      }
+    });
+  };
+
+  const updateTemplateMedia = (type: "startMsg" | "groupMsg" | "subMsg", value: string) => {
+    if (!settings) return;
+    const current = settings[type] || { text: "", mediaUrl: "", buttons: [] };
+    setSettings({
+      ...settings,
+      [type]: {
+        ...current,
+        mediaUrl: value
+      }
+    });
+  };
+
+  const addTemplateButton = (type: "startMsg" | "groupMsg" | "subMsg", btnText: string, btnUrl: string) => {
+    if (!settings) return;
+    const current = settings[type] || { text: "", mediaUrl: "", buttons: [] };
+    const currentButtons = current.buttons || [];
+    setSettings({
+      ...settings,
+      [type]: {
+        ...current,
+        buttons: [...currentButtons, { text: btnText, url: btnUrl }]
+      }
+    });
+  };
+
+  const removeTemplateButton = (type: "startMsg" | "groupMsg" | "subMsg", index: number) => {
+    if (!settings) return;
+    const current = settings[type] || { text: "", mediaUrl: "", buttons: [] };
+    const currentButtons = current.buttons || [];
+    setSettings({
+      ...settings,
+      [type]: {
+        ...current,
+        buttons: currentButtons.filter((_, idx) => idx !== index)
+      }
+    });
+  };
+
+  const handleSaveTemplates = async () => {
+    if (!settings) return;
+    try {
+      const res = await fetch("/api/admin/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(settings),
+      });
+      const updated = await res.json();
+      setSettings(updated);
+      showToast("Шаблоны стандартных сообщений успешно сохранены!", "success");
+    } catch (e) {
+      console.error(e);
+      showToast("Ошибка сохранения шаблонов", "error");
+    }
+  };
+
   // Filter users lists based on search
   const filteredUsers = users.filter(
     (u) =>
@@ -569,8 +669,63 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
       u.firstName.toLowerCase().includes(userSearch.toLowerCase())
   );
 
+  if (!isAuthenticated) {
+    return (
+      <div className="flex-1 bg-white flex items-center justify-center py-20 px-4">
+        <div className="w-full max-w-md bg-white border border-brand-border rounded-2xl shadow-xl p-8 space-y-6">
+          <div className="text-center space-y-2">
+            <div className="mx-auto w-12 h-12 bg-indigo-50 border border-indigo-100 text-indigo-600 rounded-xl flex items-center justify-center">
+              <Lock className="w-5 h-5" />
+            </div>
+            <h2 className="font-sans font-bold text-slate-900 text-lg tracking-tight font-sans">Вход в панель управления</h2>
+            <p className="text-xs text-slate-500 font-medium">Пожалуйста, авторизуйтесь для управления Telegram-ботом</p>
+          </div>
+
+          <form onSubmit={handleLoginSubmit} className="space-y-4 text-xs font-semibold">
+            {loginError && (
+              <div className="p-3 bg-red-50 border border-red-200 text-brand-red text-xs rounded-xl font-bold animate-fade-in">
+                ⚠️ {loginError}
+              </div>
+            )}
+            
+            <div className="space-y-1.5">
+              <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Логин:</label>
+              <input
+                type="text"
+                value={loginUsername}
+                onChange={(e) => setLoginUsername(e.target.value)}
+                required
+                className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                placeholder="Логин администратора"
+              />
+            </div>
+
+            <div className="space-y-1.5">
+              <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Пароль:</label>
+              <input
+                type="password"
+                value={loginPassword}
+                onChange={(e) => setLoginPassword(e.target.value)}
+                required
+                className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                placeholder="Пароль администратора"
+              />
+            </div>
+
+            <button
+              type="submit"
+              className="w-full py-3.5 bg-slate-900 hover:bg-slate-850 text-white font-sans uppercase text-[10px] font-black tracking-wider rounded-xl cursor-pointer transition-all shadow-xs active:scale-95"
+            >
+              Войти в панель
+            </button>
+          </form>
+        </div>
+      </div>
+    );
+  }
+
   return (
-    <div className="flex-1 bg-brand-bg p-6 flex flex-col h-[820px] overflow-hidden relative rounded-2xl border border-brand-border">
+    <div className="flex-1 bg-brand-bg p-6 flex flex-col relative rounded-2xl border border-brand-border h-full overflow-hidden">
       {/* Toast Notification Container */}
       {toast && (
         <div className="absolute top-4 left-1/2 -translate-x-1/2 z-50 bg-slate-900 text-white px-5 py-3 rounded-2xl shadow-xl flex items-center gap-3 text-xs font-semibold animate-fade-in border border-slate-800">
@@ -612,6 +767,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
           { id: "stats", label: "Аналитика", icon: BarChart3 },
           { id: "users", label: "Ученики", icon: Users },
           { id: "styles", label: "Стили & Настройки", icon: Sparkles },
+          { id: "templates", label: "Сообщения Бота", icon: MessageSquare },
           { id: "ads", label: "Реклама", icon: Megaphone },
           { id: "broadcasts", label: "Рассылки", icon: Bell },
           { id: "system", label: "Система", icon: Database },
@@ -633,7 +789,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
       </div>
 
       {/* Dynamic Tab Body */}
-      <div className="flex-1 overflow-y-auto custom-scrollbar space-y-6 pr-1">
+      <div className="space-y-6">
         {/* TAB 1: ANALYTICS */}
         {activeTab === "stats" && stats && (
           <div className="space-y-6 animate-fade-in">
@@ -1448,6 +1604,17 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   </div>
                 </div>
 
+                <div className="space-y-1.5">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Альтернативный Base URL (Proxy) для Gemini:</label>
+                  <input
+                    type="text"
+                    value={settings.geminiBaseUrl || ""}
+                    onChange={(e) => setSettings({ ...settings, geminiBaseUrl: e.target.value })}
+                    placeholder="Например, https://gateway.ai.cloudflare.com/v1/... (оставьте пустым для прямого подключения)"
+                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                  />
+                </div>
+
                 {aiTestResult && (
                   <div className={`p-4 rounded-xl border text-[11px] leading-relaxed font-semibold animate-fade-in ${
                     aiTestResult.success 
@@ -1969,6 +2136,325 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
           </div>
         )}
 
+        {/* TAB: BOT MESSAGE TEMPLATES */}
+        {activeTab === "templates" && settings && (
+          <div className="space-y-6 animate-fade-in pb-10">
+            <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-4 shadow-xs">
+              <div className="border-b border-brand-border pb-3 flex justify-between items-center flex-wrap gap-3">
+                <div>
+                  <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                    <MessageSquare className="w-5 h-5 text-indigo-500" />
+                    Настройка Шаблонов Стандартных Сообщений
+                  </h4>
+                  <p className="text-[11px] text-slate-400 mt-1">
+                    Здесь вы можете изменить тексты сообщений, которые отправляет бот в ответ на стандартные действия, а также прикрепить медиа и настроить интерактивные кнопки.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveTemplates}
+                  className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 border border-indigo-500 text-white font-bold uppercase text-[10px] rounded-xl transition-all shadow-xs active:scale-95 cursor-pointer"
+                >
+                  Сохранить все изменения
+                </button>
+              </div>
+
+              {/* Template List */}
+              <div className="space-y-6 pt-2">
+                
+                {/* 1. START MESSAGE */}
+                <div className="border border-brand-border rounded-xl p-5 bg-slate-50/30 space-y-4">
+                  <div className="flex items-center gap-2 border-b border-brand-border pb-2">
+                    <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-indigo-50 text-indigo-600 text-xs font-bold">1</span>
+                    <h5 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Приветствие при старте бота (/start)</h5>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Текст сообщения приветствия</label>
+                      <textarea
+                        value={settings.startMsg?.text || ""}
+                        onChange={(e) => updateTemplateText("startMsg", e.target.value)}
+                        rows={4}
+                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                        placeholder="Введите приветственный текст..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Ссылка на изображение (картинку)</label>
+                      <input
+                        type="text"
+                        value={settings.startMsg?.mediaUrl || ""}
+                        onChange={(e) => updateTemplateMedia("startMsg", e.target.value)}
+                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                        placeholder="https://example.com/image.jpg (оставьте пустым, чтобы отправлять без картинки)"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Кнопки под сообщением</label>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {settings.startMsg?.buttons?.map((btn, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-indigo-50 text-indigo-700 border border-indigo-100 rounded-lg text-xs font-bold">
+                            <span>{btn.text}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeTemplateButton("startMsg", idx)}
+                              className="text-indigo-400 hover:text-indigo-600 cursor-pointer"
+                              title="Удалить кнопку"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                        {(!settings.startMsg?.buttons || settings.startMsg.buttons.length === 0) && (
+                          <span className="text-[11px] text-slate-400 italic font-semibold">
+                            Используются стандартные системные кнопки (Решить ГДЗ, Стиль ИИ, Добавить в группу). Добавьте кастомные кнопки ниже, чтобы переопределить их.
+                          </span>
+                        )}
+                      </div>
+
+                      {/* Add Button Form inline */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end bg-white border border-slate-100 p-3 rounded-xl">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">Текст новой кнопки</label>
+                          <input
+                            type="text"
+                            value={startButtonText}
+                            onChange={(e) => setStartButtonText(e.target.value)}
+                            className="w-full bg-slate-50/50 border border-brand-border rounded-lg p-2 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                            placeholder="Например: Наш Сайт 🌐"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">Ссылка для кнопки (URL)</label>
+                          <input
+                            type="text"
+                            value={startButtonUrl}
+                            onChange={(e) => setStartButtonUrl(e.target.value)}
+                            className="w-full bg-slate-50/50 border border-brand-border rounded-lg p-2 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                            placeholder="https://t.me/..."
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!startButtonText.trim() || !startButtonUrl.trim()) return;
+                            addTemplateButton("startMsg", startButtonText.trim(), startButtonUrl.trim());
+                            setStartButtonText("");
+                            setStartButtonUrl("");
+                          }}
+                          className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase text-[10px] rounded-lg cursor-pointer transition-all active:scale-95 flex items-center justify-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Добавить кнопку
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 2. GROUP JOIN WELCOME MESSAGE */}
+                <div className="border border-brand-border rounded-xl p-5 bg-slate-50/30 space-y-4">
+                  <div className="flex items-center gap-2 border-b border-brand-border pb-2">
+                    <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-emerald-50 text-emerald-600 text-xs font-bold">2</span>
+                    <h5 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Приветствие в группе (Чат-группа)</h5>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Текст сообщения в группе (поддерживает плейсхолдер <code>{"{bot_username}"}</code>)</label>
+                      <textarea
+                        value={settings.groupMsg?.text || ""}
+                        onChange={(e) => updateTemplateText("groupMsg", e.target.value)}
+                        rows={4}
+                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                        placeholder="Введите приветственный текст для групп..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Ссылка на изображение (картинку)</label>
+                      <input
+                        type="text"
+                        value={settings.groupMsg?.mediaUrl || ""}
+                        onChange={(e) => updateTemplateMedia("groupMsg", e.target.value)}
+                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                        placeholder="https://example.com/image.jpg (оставьте пустым, чтобы отправлять без картинки)"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Кнопки под сообщением</label>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {settings.groupMsg?.buttons?.map((btn, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-50 text-emerald-700 border border-emerald-100 rounded-lg text-xs font-bold">
+                            <span>{btn.text}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeTemplateButton("groupMsg", idx)}
+                              className="text-emerald-400 hover:text-emerald-600 cursor-pointer"
+                              title="Удалить кнопку"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                        {(!settings.groupMsg?.buttons || settings.groupMsg.buttons.length === 0) && (
+                          <span className="text-[11px] text-slate-400 italic font-semibold">Нет добавленных кастомных кнопок. Сообщение будет отправлено только текстом (с изображением, если задано).</span>
+                        )}
+                      </div>
+
+                      {/* Add Button Form inline */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end bg-white border border-slate-100 p-3 rounded-xl">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">Текст новой кнопки</label>
+                          <input
+                            type="text"
+                            value={groupButtonText}
+                            onChange={(e) => setGroupButtonText(e.target.value)}
+                            className="w-full bg-slate-50/50 border border-brand-border rounded-lg p-2 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                            placeholder="Например: Решить ГДЗ 🎒"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">Ссылка для кнопки (URL)</label>
+                          <input
+                            type="text"
+                            value={groupButtonUrl}
+                            onChange={(e) => setGroupButtonUrl(e.target.value)}
+                            className="w-full bg-slate-50/50 border border-brand-border rounded-lg p-2 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                            placeholder="https://t.me/..."
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!groupButtonText.trim() || !groupButtonUrl.trim()) return;
+                            addTemplateButton("groupMsg", groupButtonText.trim(), groupButtonUrl.trim());
+                            setGroupButtonText("");
+                            setGroupButtonUrl("");
+                          }}
+                          className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase text-[10px] rounded-lg cursor-pointer transition-all active:scale-95 flex items-center justify-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Добавить кнопку
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+                {/* 3. MANDATORY CHANNELS SUBSCRIPTION CHECK MESSAGE */}
+                <div className="border border-brand-border rounded-xl p-5 bg-slate-50/30 space-y-4">
+                  <div className="flex items-center gap-2 border-b border-brand-border pb-2">
+                    <span className="flex items-center justify-center w-6 h-6 rounded-lg bg-amber-50 text-amber-600 text-xs font-bold">3</span>
+                    <h5 className="font-bold text-slate-800 text-xs uppercase tracking-wider">Обязательная подписка (ОП) на каналы спонсоров</h5>
+                  </div>
+                  
+                  <div className="space-y-3">
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">
+                        Текст требования подписки (поддерживает плейсхолдеры <code>{"{channel_name}"}</code> и <code>{"{channel_url}"}</code>)
+                      </label>
+                      <textarea
+                        value={settings.subMsg?.text || ""}
+                        onChange={(e) => updateTemplateText("subMsg", e.target.value)}
+                        rows={4}
+                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                        placeholder="Введите текст требования подписки..."
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Ссылка на изображение (картинку)</label>
+                      <input
+                        type="text"
+                        value={settings.subMsg?.mediaUrl || ""}
+                        onChange={(e) => updateTemplateMedia("subMsg", e.target.value)}
+                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                        placeholder="https://example.com/image.jpg (оставьте пустым, чтобы отправлять без картинки)"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Кнопки под сообщением</label>
+                      <div className="flex flex-wrap gap-2 mb-3">
+                        {settings.subMsg?.buttons?.map((btn, idx) => (
+                          <div key={idx} className="flex items-center gap-1.5 px-3 py-1.5 bg-amber-50 text-amber-700 border border-amber-100 rounded-lg text-xs font-bold">
+                            <span>{btn.text}</span>
+                            <button
+                              type="button"
+                              onClick={() => removeTemplateButton("subMsg", idx)}
+                              className="text-amber-400 hover:text-emerald-600 cursor-pointer"
+                              title="Удалить кнопку"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
+                            </button>
+                          </div>
+                        ))}
+                        {(!settings.subMsg?.buttons || settings.subMsg.buttons.length === 0) && (
+                          <span className="text-[11px] text-slate-400 italic font-semibold">Нет добавленных дополнительных кнопок. Кнопка подписаться и кнопка проверки всегда добавляются автоматически.</span>
+                        )}
+                      </div>
+
+                      {/* Add Button Form inline */}
+                      <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 items-end bg-white border border-slate-100 p-3 rounded-xl">
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">Текст новой кнопки</label>
+                          <input
+                            type="text"
+                            value={subButtonText}
+                            onChange={(e) => setSubButtonText(e.target.value)}
+                            className="w-full bg-slate-50/50 border border-brand-border rounded-lg p-2 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                            placeholder="Например: Задать Вопрос 💬"
+                          />
+                        </div>
+                        <div>
+                          <label className="block text-[10px] font-bold text-slate-400 mb-1">Ссылка для кнопки (URL)</label>
+                          <input
+                            type="text"
+                            value={subButtonUrl}
+                            onChange={(e) => setSubButtonUrl(e.target.value)}
+                            className="w-full bg-slate-50/50 border border-brand-border rounded-lg p-2 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
+                            placeholder="https://t.me/..."
+                          />
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (!subButtonText.trim() || !subButtonUrl.trim()) return;
+                            addTemplateButton("subMsg", subButtonText.trim(), subButtonUrl.trim());
+                            setSubButtonText("");
+                            setSubButtonUrl("");
+                          }}
+                          className="w-full py-2 bg-slate-900 hover:bg-slate-800 text-white font-bold uppercase text-[10px] rounded-lg cursor-pointer transition-all active:scale-95 flex items-center justify-center gap-1"
+                        >
+                          <Plus className="w-3.5 h-3.5" />
+                          Добавить кнопку
+                        </button>
+                      </div>
+                    </div>
+                  </div>
+                </div>
+
+              </div>
+
+              <div className="pt-4 border-t border-brand-border flex justify-end gap-3">
+                <button
+                  type="button"
+                  onClick={handleSaveTemplates}
+                  className="px-6 py-3 bg-indigo-600 hover:bg-indigo-700 border border-indigo-500 text-white font-bold uppercase text-[11px] rounded-xl transition-all shadow-xs active:scale-95 flex items-center gap-1.5 cursor-pointer"
+                >
+                  <CheckCircle className="w-4 h-4" />
+                  Сохранить настройки шаблонов
+                </button>
+              </div>
+
+            </div>
+          </div>
+        )}
+
         {/* TAB 6: SYSTEM METRICS */}
         {activeTab === "system" && system && (
           <div className="space-y-4 animate-fade-in">
@@ -2218,6 +2704,336 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   </div>
                 );
               })()}
+            </div>
+          </div>
+        )}
+
+        {/* TAB 8: CUSTOM TEMPLATE MESSAGES */}
+        {activeTab === "templates" && settings && (
+          <div className="space-y-6 animate-fade-in">
+            <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-4 shadow-xs">
+              <div className="flex items-center justify-between border-b border-brand-border pb-4">
+                <div>
+                  <h3 className="font-bold text-slate-800 text-sm flex items-center gap-2 font-sans">
+                    <MessageSquare className="w-5 h-5 text-indigo-500" />
+                    Шаблоны стандартных сообщений бота
+                  </h3>
+                  <p className="text-xs text-slate-500 font-medium mt-1">
+                    Настройка текста, медиа-вложений и интерактивных кнопок при разных действиях пользователей в Telegram-боте.
+                  </p>
+                </div>
+                <button
+                  onClick={handleSaveTemplates}
+                  className="px-5 py-2.5 bg-slate-900 hover:bg-slate-850 text-white font-sans uppercase text-[10px] font-black tracking-wider rounded-xl cursor-pointer transition-all shadow-xs active:scale-95"
+                >
+                  💾 Сохранить все шаблоны
+                </button>
+              </div>
+
+              {/* CARD 1: Start welcome message */}
+              <div className="bg-slate-50 border border-brand-border rounded-xl p-5 space-y-4 text-xs font-semibold">
+                <h4 className="font-bold text-slate-800 text-sm border-b border-brand-border pb-2 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-indigo-500 rounded-full" />
+                  Приветственное сообщение (/start)
+                </h4>
+                <p className="text-[11px] text-slate-500 leading-normal font-normal">
+                  Отправляется пользователю, когда он впервые запускает бота в личных сообщениях. Поддерживает форматирование Markdown.
+                </p>
+
+                <div className="space-y-2">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Текст сообщения приветствия:</label>
+                  <textarea
+                    rows={4}
+                    value={settings.startMsg?.text || ""}
+                    onChange={(e) => updateTemplateText("startMsg", e.target.value)}
+                    className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-medium font-sans focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                    placeholder="Введите текст приветствия..."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на картинку (изображение - необязательно):</label>
+                  <input
+                    type="text"
+                    value={settings.startMsg?.mediaUrl || ""}
+                    onChange={(e) => updateTemplateMedia("startMsg", e.target.value)}
+                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                    placeholder="https://example.com/image.jpg (оставьте пустым для обычного текстового сообщения)"
+                  />
+                </div>
+
+                {/* Inline buttons list editor for /start */}
+                <div className="space-y-3 bg-white p-4.5 rounded-xl border border-brand-border mt-3">
+                  <label className="text-slate-700 text-[11px] font-black uppercase tracking-wider block">Собственные Inline-кнопки (для /start):</label>
+                  <p className="text-[10px] text-slate-400 font-normal leading-normal">
+                    Задайте собственный список кнопок в приветственном сообщении (ссылки на каналы, чаты, внешние ресурсы и др.). Если список пуст, бот будет использовать стандартный набор меню (🎒 Решить ГДЗ, 🎭 Выбрать стиль, ➕ Добавить в группу).
+                  </p>
+
+                  {/* List of currently added buttons */}
+                  <div className="space-y-2 max-w-xl">
+                    {(settings.startMsg?.buttons || []).map((btn, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-slate-50 border border-brand-border p-2.5 rounded-xl text-xs">
+                        <div className="flex gap-4">
+                          <span className="font-bold text-slate-800">Текст: <span className="text-indigo-600 font-semibold">"{btn.text}"</span></span>
+                          <span className="text-slate-500 font-mono text-[11px] select-all truncate max-w-xs">{btn.url}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeTemplateButton("startMsg", idx)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                          title="Удалить кнопку"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                    {(settings.startMsg?.buttons || []).length === 0 && (
+                      <span className="text-[11px] text-slate-400 font-medium block">Нет кастомных кнопок. Будет отображаться стандартное интерактивное меню.</span>
+                    )}
+                  </div>
+
+                  {/* Add new button form */}
+                  <div className="flex flex-col sm:flex-row gap-3 items-end max-w-xl pt-2 border-t border-slate-100 mt-2">
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wide">Текст кнопки:</span>
+                      <input
+                        type="text"
+                        value={startButtonText}
+                        onChange={(e) => setStartButtonText(e.target.value)}
+                        placeholder="Напр: 🎒 Наш Канал"
+                        className="w-full bg-slate-50 border border-brand-border rounded-xl p-2 text-xs text-slate-900"
+                      />
+                    </div>
+                    <div className="flex-[2] space-y-1">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wide">Ссылка кнопки (URL):</span>
+                      <input
+                        type="text"
+                        value={startButtonUrl}
+                        onChange={(e) => setStartButtonUrl(e.target.value)}
+                        placeholder="https://t.me/..."
+                        className="w-full bg-slate-50 border border-brand-border rounded-xl p-2 text-xs font-mono"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!startButtonText.trim() || !startButtonUrl.trim()}
+                      onClick={() => {
+                        addTemplateButton("startMsg", startButtonText.trim(), startButtonUrl.trim());
+                        setStartButtonText("");
+                        setStartButtonUrl("");
+                      }}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer active:scale-95"
+                    >
+                      <Plus className="w-4 h-4 inline-block mr-1" /> Добавить
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* CARD 2: Group Addition Welcome */}
+              <div className="bg-slate-50 border border-brand-border rounded-xl p-5 space-y-4 text-xs font-semibold">
+                <h4 className="font-bold text-slate-800 text-sm border-b border-brand-border pb-2 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-emerald-500 rounded-full" />
+                  Приветствие при добавлении бота в группу / беседу
+                </h4>
+                <p className="text-[11px] text-slate-500 leading-normal font-normal">
+                  Отправляется в групповой чат сразу после того, как бота добавляют новые участники или администратор беседы. Задайте понятное руководство, как пользоваться ботом в группе.
+                </p>
+
+                <div className="space-y-2">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Текст сообщения в группе:</label>
+                  <textarea
+                    rows={4}
+                    value={settings.groupMsg?.text || ""}
+                    onChange={(e) => updateTemplateText("groupMsg", e.target.value)}
+                    className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-medium font-sans focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                    placeholder="Привет всем! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут..."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на картинку (изображение - необязательно):</label>
+                  <input
+                    type="text"
+                    value={settings.groupMsg?.mediaUrl || ""}
+                    onChange={(e) => updateTemplateMedia("groupMsg", e.target.value)}
+                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                    placeholder="https://example.com/image.jpg"
+                  />
+                </div>
+
+                {/* Inline buttons list editor for groups */}
+                <div className="space-y-3 bg-white p-4.5 rounded-xl border border-brand-border mt-3">
+                  <label className="text-slate-700 text-[11px] font-black uppercase tracking-wider block">Inline-кнопки под сообщением в беседе:</label>
+                  
+                  {/* List of currently added buttons */}
+                  <div className="space-y-2 max-w-xl">
+                    {(settings.groupMsg?.buttons || []).map((btn, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-slate-50 border border-brand-border p-2.5 rounded-xl text-xs">
+                        <div className="flex gap-4">
+                          <span className="font-bold text-slate-800">Текст: <span className="text-indigo-600 font-semibold">"{btn.text}"</span></span>
+                          <span className="text-slate-500 font-mono text-[11px] select-all truncate max-w-xs">{btn.url}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeTemplateButton("groupMsg", idx)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                    {(settings.groupMsg?.buttons || []).length === 0 && (
+                      <span className="text-[11px] text-slate-400 font-medium block">Нет кнопок под групповым приветствием.</span>
+                    )}
+                  </div>
+
+                  {/* Add new button form */}
+                  <div className="flex flex-col sm:flex-row gap-3 items-end max-w-xl pt-2 border-t border-slate-100 mt-2">
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wide">Текст кнопки:</span>
+                      <input
+                        type="text"
+                        value={groupButtonText}
+                        onChange={(e) => setGroupButtonText(e.target.value)}
+                        placeholder="Напр: 🎒 Наш сайт"
+                        className="w-full bg-slate-50 border border-brand-border rounded-xl p-2 text-xs text-slate-900"
+                      />
+                    </div>
+                    <div className="flex-[2] space-y-1">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wide">Ссылка кнопки (URL):</span>
+                      <input
+                        type="text"
+                        value={groupButtonUrl}
+                        onChange={(e) => setGroupButtonUrl(e.target.value)}
+                        placeholder="https://..."
+                        className="w-full bg-slate-50 border border-brand-border rounded-xl p-2 text-xs font-mono"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!groupButtonText.trim() || !groupButtonUrl.trim()}
+                      onClick={() => {
+                        addTemplateButton("groupMsg", groupButtonText.trim(), groupButtonUrl.trim());
+                        setGroupButtonText("");
+                        setGroupButtonUrl("");
+                      }}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer active:scale-95"
+                    >
+                      <Plus className="w-4 h-4 inline-block mr-1" /> Добавить
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* CARD 3: Mandatory Subscription block */}
+              <div className="bg-slate-50 border border-brand-border rounded-xl p-5 space-y-4 text-xs font-semibold">
+                <h4 className="font-bold text-slate-800 text-sm border-b border-brand-border pb-2 flex items-center gap-2">
+                  <span className="w-2.5 h-2.5 bg-amber-500 rounded-full" />
+                  Уведомление об обязательной подписке (ОП)
+                </h4>
+                <p className="text-[11px] text-slate-500 leading-normal font-normal">
+                  Отправляется пользователям без премиум-аккаунта, которые еще не подписались на обязательный спонсорский канал. В тексте можно использовать шаблонные переменные <code>{"{channel_name}"}</code> и <code>{"{channel_url}"}</code>. Бот автоматически добавит кнопку подписки и кнопку проверки "✅ Я подписался"!
+                </p>
+
+                <div className="space-y-2">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Текст сообщения об ОП:</label>
+                  <textarea
+                    rows={4}
+                    value={settings.subMsg?.text || ""}
+                    onChange={(e) => updateTemplateText("subMsg", e.target.value)}
+                    className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-medium font-sans focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                    placeholder="⚠️ ОБЯЗАТЕЛЬНАЯ ПОДПИСКА (ОП)..."
+                  />
+                </div>
+
+                <div className="space-y-2">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на картинку (изображение - необязательно):</label>
+                  <input
+                    type="text"
+                    value={settings.subMsg?.mediaUrl || ""}
+                    onChange={(e) => updateTemplateMedia("subMsg", e.target.value)}
+                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
+                    placeholder="https://example.com/image.jpg"
+                  />
+                </div>
+
+                {/* Inline buttons list editor for subscription */}
+                <div className="space-y-3 bg-white p-4.5 rounded-xl border border-brand-border mt-3">
+                  <label className="text-slate-700 text-[11px] font-black uppercase tracking-wider block">Дополнительные кнопки ОП (необязательно):</label>
+                  <p className="text-[10px] text-slate-400 font-normal leading-normal">
+                    Кнопка проверки подписки и ссылка на спонсорский канал создаются автоматически. При желании вы можете добавить сюда дополнительные кнопки.
+                  </p>
+
+                  {/* List of currently added buttons */}
+                  <div className="space-y-2 max-w-xl">
+                    {(settings.subMsg?.buttons || []).map((btn, idx) => (
+                      <div key={idx} className="flex items-center justify-between bg-slate-50 border border-brand-border p-2.5 rounded-xl text-xs">
+                        <div className="flex gap-4">
+                          <span className="font-bold text-slate-800">Текст: <span className="text-indigo-600 font-semibold">"{btn.text}"</span></span>
+                          <span className="text-slate-500 font-mono text-[11px] select-all truncate max-w-xs">{btn.url}</span>
+                        </div>
+                        <button
+                          type="button"
+                          onClick={() => removeTemplateButton("subMsg", idx)}
+                          className="p-1.5 text-red-500 hover:bg-red-50 rounded-lg transition-colors cursor-pointer"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    ))}
+                    {(settings.subMsg?.buttons || []).length === 0 && (
+                      <span className="text-[11px] text-slate-400 font-medium block">Нет дополнительных кнопок (будут только стандартные).</span>
+                    )}
+                  </div>
+
+                  {/* Add new button form */}
+                  <div className="flex flex-col sm:flex-row gap-3 items-end max-w-xl pt-2 border-t border-slate-100 mt-2">
+                    <div className="flex-1 space-y-1">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wide">Текст кнопки:</span>
+                      <input
+                        type="text"
+                        value={subButtonText}
+                        onChange={(e) => setSubButtonText(e.target.value)}
+                        placeholder="Напр: ⚙️ Техподдержка"
+                        className="w-full bg-slate-50 border border-brand-border rounded-xl p-2 text-xs text-slate-900"
+                      />
+                    </div>
+                    <div className="flex-[2] space-y-1">
+                      <span className="text-[9px] text-slate-400 uppercase font-bold tracking-wide">Ссылка кнопки (URL):</span>
+                      <input
+                        type="text"
+                        value={subButtonUrl}
+                        onChange={(e) => setSubButtonUrl(e.target.value)}
+                        placeholder="https://t.me/shket_support"
+                        className="w-full bg-slate-50 border border-brand-border rounded-xl p-2 text-xs font-mono"
+                      />
+                    </div>
+                    <button
+                      type="button"
+                      disabled={!subButtonText.trim() || !subButtonUrl.trim()}
+                      onClick={() => {
+                        addTemplateButton("subMsg", subButtonText.trim(), subButtonUrl.trim());
+                        setSubButtonText("");
+                        setSubButtonUrl("");
+                      }}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 text-white rounded-xl text-xs font-bold transition-all shrink-0 cursor-pointer active:scale-95"
+                    >
+                      <Plus className="w-4 h-4 inline-block mr-1" /> Добавить
+                    </button>
+                  </div>
+                </div>
+              </div>
+
+              {/* Bottom Sticky action bar */}
+              <div className="flex justify-end gap-3.5 border-t border-brand-border pt-5 mt-5">
+                <button
+                  onClick={handleSaveTemplates}
+                  className="px-8 py-3 bg-slate-900 hover:bg-slate-850 text-white font-sans uppercase text-[10px] font-black tracking-wider rounded-xl cursor-pointer transition-all shadow-xs active:scale-95"
+                >
+                  💾 Сохранить абсолютно все шаблоны
+                </button>
+              </div>
             </div>
           </div>
         )}

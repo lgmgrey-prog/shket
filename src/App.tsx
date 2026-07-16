@@ -31,8 +31,8 @@ export default function App() {
       </header>
 
       {/* Main Workspace */}
-      <main className="flex-1 flex flex-col overflow-y-auto bg-white">
-        <div className="w-full animate-fade-in">
+      <main className="flex-1 flex flex-col overflow-hidden bg-white p-5">
+        <div className="w-full h-full flex flex-col animate-fade-in">
           <AdminPanel />
         </div>
       </main>

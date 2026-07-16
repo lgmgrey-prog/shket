@@ -85,6 +85,12 @@ export interface DbBroadcast {
   createdAt: string;
 }
 
+export interface BotMessageTemplate {
+  text: string;
+  mediaUrl?: string;
+  buttons?: { text: string; url: string }[];
+}
+
 export interface DbSettings {
   requiredChannelUrl: string;
   requiredChannelName: string;
@@ -108,6 +114,12 @@ export interface DbSettings {
   grokApiKey?: string;
   grokModel?: string;
   geminiApiKey?: string;
+  geminiBaseUrl?: string;
+  startMsg?: BotMessageTemplate;
+  groupMsg?: BotMessageTemplate;
+  subMsg?: BotMessageTemplate;
+  totalGdzSolved?: number;
+  totalMessagesChat?: number;
 }
 
 export interface SystemStats {
