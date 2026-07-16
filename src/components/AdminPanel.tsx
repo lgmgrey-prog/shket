@@ -102,6 +102,49 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
   const [isConnecting, setIsConnecting] = useState(false);
   const [tgBotError, setTgBotError] = useState("");
 
+  // AI Connection test states
+  const [aiTestLoading, setAiTestLoading] = useState(false);
+  const [aiTestResult, setAiTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleTestAi = async (provider: "gemini" | "grok") => {
+    if (!settings) return;
+    setAiTestLoading(true);
+    setAiTestResult(null);
+    try {
+      const res = await fetch("/api/admin/test-ai", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          provider,
+          config: {
+            geminiApiKey: settings.geminiApiKey,
+            grokApiKey: settings.grokApiKey,
+            grokModel: settings.grokModel,
+          },
+        }),
+      });
+      const data = await res.json();
+      if (res.ok && data.success) {
+        setAiTestResult({
+          success: true,
+          message: `Успешно! Получен ответ от модели: "${data.result}"`,
+        });
+      } else {
+        setAiTestResult({
+          success: false,
+          message: `Ошибка тестирования: ${data.error || "Неизвестная ошибка"}`,
+        });
+      }
+    } catch (err: any) {
+      setAiTestResult({
+        success: false,
+        message: `Ошибка сети/сервера: ${err?.message || String(err)}`,
+      });
+    } finally {
+      setAiTestLoading(false);
+    }
+  };
+
   // In-app Notification toast state
   const [toast, setToast] = useState<{ message: string; type: "success" | "error" | "info" } | null>(null);
 
@@ -866,7 +909,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     {selectedUser.customPrompt && (
                       <div className="border-t border-brand-border pt-3 text-left">
                         <span className="text-slate-700 block text-[10px] uppercase font-bold mb-1">Кастомный ИИ-промпт (Mega/Ultra):</span>
-                        <div className="bg-white p-2.5 rounded-xl border border-brand-border text-[11px] text-slate-600 font-medium leading-relaxed max-h-[80px] overflow-y-auto custom-scrollbar">
+                        <div className="bg-white p-2.5 rounded-xl border border-brand-border text-[11px] text-slate-600 font-medium leading-relaxed">
                           {selectedUser.customPrompt}
                         </div>
                       </div>
@@ -1355,7 +1398,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 Выберите основной искусственный интеллект для общения с пользователями и решения домашних заданий (ГДЗ). Вы можете использовать встроенный Gemini или подключить Grok от xAI.
               </p>
 
-              <form onSubmit={handleUpdateSettings} className="space-y-4 text-xs font-semibold">
+               <form onSubmit={handleUpdateSettings} className="space-y-4 text-xs font-semibold">
                 <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                   <div className="space-y-1.5">
                     <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Основной ИИ провайдер:</label>
@@ -1405,16 +1448,37 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   </div>
                 </div>
 
+                {aiTestResult && (
+                  <div className={`p-4 rounded-xl border text-[11px] leading-relaxed font-semibold animate-fade-in ${
+                    aiTestResult.success 
+                      ? "bg-emerald-50 border-emerald-200 text-emerald-850" 
+                      : "bg-rose-50 border-rose-200 text-rose-850"
+                  }`}>
+                    <span className="font-bold">{aiTestResult.success ? "✅ Успешно: " : "❌ Ошибка: "}</span>
+                    {aiTestResult.message}
+                  </div>
+                )}
+
                 <div className="bg-slate-50 border border-brand-border rounded-xl p-3.5 text-[11px] text-slate-500 leading-relaxed font-normal">
                   💡 <strong>Подсказка:</strong> Для решения домашнего задания по фото через <strong>Grok</strong>, убедитесь, что вы используете модель с поддержкой зрения (vision), либо оставьте <code>grok-2-1212</code>. Для обработки голосовых сообщений и видеокружков всегда задействуется Gemini (требуется наличие ключа в .env или в поле выше) для точного распознавания речи.
                 </div>
 
-                <button
-                  type="submit"
-                  className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95 animate-pulse"
-                >
-                  💾 Сохранить настройки ИИ моделей
-                </button>
+                <div className="flex gap-4">
+                  <button
+                    type="button"
+                    disabled={aiTestLoading}
+                    onClick={() => handleTestAi(settings.aiProvider || "gemini")}
+                    className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95 text-center flex items-center justify-center gap-1.5"
+                  >
+                    <span>{aiTestLoading ? "⏳ Проверка..." : `⚡ Тест ${settings.aiProvider === "grok" ? "Grok" : "Gemini"} соединения`}</span>
+                  </button>
+                  <button
+                    type="submit"
+                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95 animate-pulse"
+                  >
+                    💾 Сохранить настройки ИИ моделей
+                  </button>
+                </div>
               </form>
             </div>
           </div>
@@ -1455,7 +1519,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
               </h4>
               <p className="text-[10px] text-brand-muted uppercase tracking-wider font-bold">Воронка конверсии: Клик ➔ Уникальный ➔ Прошел обучение ➔ Купил премиум ➔ Выручка</p>
 
-              <div className="space-y-3 max-h-[260px] overflow-y-auto custom-scrollbar pr-1">
+              <div className="space-y-3">
                 {campaigns.map((camp) => {
                   const onboardingRate = camp.uniqueUsers > 0 ? Math.round((camp.completedOnboarding / camp.uniqueUsers) * 100) : 0;
                   const purchaseRate = camp.uniqueUsers > 0 ? Math.round((camp.premiumPurchased / camp.uniqueUsers) * 100) : 0;
@@ -1815,7 +1879,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 ⚙️ Зарегистрированные массовые рассылки
               </h4>
 
-              <div className="space-y-3 max-h-[340px] overflow-y-auto custom-scrollbar pr-1">
+              <div className="space-y-3">
                 {broadcasts.map((b) => {
                   const percent = b.totalTarget > 0 ? Math.round(((b.sentCount + b.errorCount) / b.totalTarget) * 100) : 0;
                   return (

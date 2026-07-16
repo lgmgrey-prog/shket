@@ -4,7 +4,7 @@ import os from "os";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { dbInstance, DbUser } from "./server/db.js";
-import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWithVoiceOrVideo } from "./server/gemini.js";
+import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWithVoiceOrVideo, testAiConnection } from "./server/gemini.js";
 
 // Load env variables
 dotenv.config();
@@ -2353,6 +2353,21 @@ async function startServer() {
   app.post("/api/admin/settings", (req, res) => {
     const updated = dbInstance.updateSettings(req.body);
     res.json(updated);
+  });
+
+  // Test AI Connection
+  app.post("/api/admin/test-ai", async (req, res) => {
+    try {
+      const { provider, config } = req.body;
+      if (!provider) {
+        return res.status(400).json({ error: "Provider is required" });
+      }
+      const result = await testAiConnection(provider, config || {});
+      res.json({ success: true, result });
+    } catch (err: any) {
+      console.error("Test AI Connection error:", err);
+      res.status(500).json({ success: false, error: err?.message || String(err) });
+    }
   });
 
   // Get Styles

@@ -226,8 +226,9 @@ export async function chatWithBot(userId: string, userMessage: string): Promise<
       dbInstance.saveMessage(userId, "model", aiText);
       return aiText;
     } catch (err: any) {
-      console.warn("Grok API call failed, using mock fallbacks:", err);
-      const mockReply = getMockChatResponse(user.currentStyleId, userMessage);
+      console.warn("Grok API call failed:", err);
+      const errMsg = err?.message || String(err);
+      const mockReply = `⚠️ Ошибка Grok API: "${errMsg}". Пожалуйста, проверьте API ключ xAI Grok в панели администратора (раздел "Настройки") или проверьте статус баланса вашего аккаунта xAI.`;
       dbInstance.saveMessage(userId, "user", userMessage);
       dbInstance.saveMessage(userId, "model", mockReply);
       return mockReply;
@@ -254,10 +255,13 @@ export async function chatWithBot(userId: string, userMessage: string): Promise<
     dbInstance.saveMessage(userId, "user", userMessage);
     dbInstance.saveMessage(userId, "model", aiText);
     return aiText;
-  } catch (err) {
-    console.warn("Gemini API call failed, using mock fallbacks:", err);
-    // Write mock fallback to message logs so the UI still functions perfectly
-    const mockReply = getMockChatResponse(user.currentStyleId, userMessage);
+  } catch (err: any) {
+    console.warn("Gemini API call failed:", err);
+    const errMsg = err?.message || String(err);
+    const hasKey = !!(settings.geminiApiKey || process.env.GEMINI_API_KEY);
+    const mockReply = hasKey
+      ? `⚠️ Ошибка Gemini API: "${errMsg}". Пожалуйста, проверьте API-ключ Gemini в панели администратора (раздел "Настройки").`
+      : getMockChatResponse(user.currentStyleId, userMessage);
     dbInstance.saveMessage(userId, "user", userMessage);
     dbInstance.saveMessage(userId, "model", mockReply);
     return mockReply;
@@ -323,8 +327,13 @@ export async function solveHomework(base64ImageWithHeader: string): Promise<stri
     });
 
     return response.text || "Не смог разобрать картинку, бро. Попробуй сфоткать четче!";
-  } catch (err) {
-    console.warn("Gemini API GDZ failed, using mock fallback:", err);
+  } catch (err: any) {
+    console.warn("Gemini API GDZ failed:", err);
+    const errMsg = err?.message || String(err);
+    const hasKey = !!(settings.geminiApiKey || process.env.GEMINI_API_KEY);
+    if (hasKey) {
+      return `⚠️ Ошибка Gemini API при решении домашнего задания: "${errMsg}". Пожалуйста, проверьте правильность вашего API-ключа Gemini в настройках администратора.`;
+    }
     return getMockGdzResponse();
   }
 }
@@ -465,4 +474,72 @@ export async function chatWithVoiceOrVideo(
     return mockReply;
   }
 }
+
+/**
+ * Test AI Provider connections from the admin panel settings
+ */
+export async function testAiConnection(
+  provider: "gemini" | "grok",
+  config: { geminiApiKey?: string; grokApiKey?: string; grokModel?: string }
+): Promise<string> {
+  if (provider === "gemini") {
+    const apiKey = config.geminiApiKey || process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+      throw new Error("Ключ GEMINI_API_KEY не задан ни в настройках, ни в переменных окружения (.env)");
+    }
+    const testAi = new GoogleGenAI({
+      apiKey: apiKey,
+      httpOptions: {
+        headers: {
+          "User-Agent": "aistudio-build",
+        },
+      },
+    });
+    const response = await testAi.models.generateContent({
+      model: "gemini-3.5-flash",
+      contents: "Ответь строго одним словом 'УСПЕШНО' на русском языке, если ты меня слышишь.",
+    });
+    const text = response.text?.trim();
+    if (!text) {
+      throw new Error("Соединение установлено, но получен пустой ответ от модели.");
+    }
+    return text;
+  } else if (provider === "grok") {
+    const apiKey = config.grokApiKey || process.env.GROK_API_KEY;
+    if (!apiKey) {
+      throw new Error("Ключ GROK_API_KEY не задан ни в настройках, ни в переменных окружения (.env)");
+    }
+    const modelToUse = config.grokModel || "grok-2-1212";
+    const res = await fetch("https://api.xai.com/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        model: modelToUse,
+        messages: [
+          { role: "user", content: "Ответь строго одним словом 'УСПЕШНО' на русском языке, если ты меня слышишь." }
+        ],
+        temperature: 0.1,
+        max_tokens: 15,
+      }),
+    });
+
+    if (!res.ok) {
+      const errorText = await res.text();
+      throw new Error(`Grok API вернул код ошибки ${res.status}: ${errorText}`);
+    }
+
+    const data: any = await res.json();
+    const content = data?.choices?.[0]?.message?.content?.trim();
+    if (!content) {
+      throw new Error("Соединение установлено, но от Grok API получен пустой ответ.");
+    }
+    return content;
+  } else {
+    throw new Error("Неизвестный провайдер ИИ");
+  }
+}
+
 
