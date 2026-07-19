@@ -218,17 +218,55 @@ async function ensureTelegramWebhook() {
     return;
   }
 
-  addSystemLog("info", "system", `Инициализация вебхука в режиме Production для бота @${settings.tgBotUsername || "bot"} на URL: ${webhookUrl}`);
   try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ url: webhookUrl }),
-    });
-    const data = await res.json();
-    addSystemLog("info", "system", "Результат настройки вебхука при старте сервера:", data);
+    const infoRes = await fetch(`https://api.telegram.org/bot${token}/getWebhookInfo`);
+    if (infoRes.ok) {
+      const infoData = await infoRes.json();
+      if (infoData?.ok && infoData.result?.url === webhookUrl) {
+        addSystemLog("info", "system", `Вебхук уже настроен корректно на URL: ${webhookUrl}. Пропускаем установку.`);
+        return;
+      }
+    }
   } catch (err: any) {
-    addSystemLog("error", "system", `Ошибка при установке вебхука при старте: ${err.message}`);
+    addSystemLog("warn", "system", `Не удалось проверить текущий вебхук: ${err.message}. Будет произведена принудительная установка.`);
+  }
+
+  addSystemLog("info", "system", `Инициализация вебхука в режиме Production для бота @${settings.tgBotUsername || "bot"} на URL: ${webhookUrl}`);
+  
+  const performSetWebhook = async (): Promise<{ success: boolean; retryAfter?: number }> => {
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ url: webhookUrl }),
+      });
+      const data = await res.json();
+      addSystemLog("info", "system", "Результат настройки вебхука:", data);
+      
+      if (!data.ok) {
+        if (data.error_code === 429) {
+          const retryAfter = data.parameters?.retry_after || 2;
+          return { success: false, retryAfter };
+        }
+        addSystemLog("error", "system", `Ошибка от Telegram при установке вебхука: ${data.description}`);
+      }
+      return { success: data.ok };
+    } catch (err: any) {
+      addSystemLog("error", "system", `Сетевая ошибка при установке вебхука: ${err.message}`);
+      return { success: false };
+    }
+  };
+
+  try {
+    let result = await performSetWebhook();
+    if (!result.success && result.retryAfter) {
+      const waitTime = (result.retryAfter + 1) * 1000;
+      addSystemLog("warn", "system", `Telegram API вернул 429. Ожидание перед повторной попыткой: ${waitTime}мс...`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+      await performSetWebhook();
+    }
+  } catch (err: any) {
+    addSystemLog("error", "system", `Ошибка в цикле установки вебхука: ${err.message}`);
   }
 }
 
@@ -236,8 +274,13 @@ let isPollingActive = false;
 let lastUpdateId = 0;
 
 async function startTelegramPolling() {
-  if (process.env.NODE_ENV === "production") {
-    addSystemLog("info", "system", "Режим Production: фоновый пуллинг отключен, активируем автонастройку вебхука...");
+  const settings = dbInstance.getSettings();
+  const token = settings.tgBotToken;
+  const webhookUrl = settings.tgWebhookUrl;
+
+  if (process.env.NODE_ENV === "production" || (webhookUrl && webhookUrl.trim().startsWith("http"))) {
+    addSystemLog("info", "system", "Активируем режим вебхука (пуллинг отключен), производим автонастройку...");
+    isPollingActive = false;
     await ensureTelegramWebhook();
     return;
   }
@@ -247,8 +290,6 @@ async function startTelegramPolling() {
     return;
   }
   
-  const settings = dbInstance.getSettings();
-  const token = settings.tgBotToken;
   if (!token) {
     addSystemLog("info", "system", "Фоновый пуллинг (getUpdates) пропущен: токен не задан в настройках");
     return;
