@@ -455,7 +455,7 @@ export class Database {
             yookassaEnabled: false,
             aiProvider: "gemini",
             grokApiKey: "",
-            grokModel: "grok-2-1212",
+            grokModel: "grok-2",
             geminiApiKey: "",
             startMsg: {
               text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
@@ -535,7 +535,7 @@ export class Database {
         yookassaEnabled: false,
         aiProvider: "gemini",
         grokApiKey: "",
-        grokModel: "grok-2-1212",
+        grokModel: "grok-2",
         geminiApiKey: "",
         totalGdzSolved: 150,
         totalMessagesChat: 1200,

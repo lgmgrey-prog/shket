@@ -103,6 +103,57 @@ async function generateContentWithRetry(params: GenerateConfig): Promise<any> {
 }
 
 /**
+ * Dynamic available models discovery and validation for xAI API
+ */
+async function getGrokModels(apiKey: string): Promise<string[]> {
+  try {
+    const res = await fetch("https://api.x.ai/v1/models", {
+      headers: {
+        "Authorization": `Bearer ${apiKey}`,
+      }
+    });
+    if (!res.ok) return [];
+    const data = await res.json();
+    if (data && Array.isArray(data.data)) {
+      return data.data.map((m: any) => m.id);
+    }
+  } catch (e) {
+    console.warn("Failed to fetch Grok models list:", e);
+  }
+  return [];
+}
+
+/**
+ * Resolves a model ID, falling back dynamically to what's available
+ */
+async function resolveGrokModel(apiKey: string, requestedModel: string, isVision: boolean): Promise<string> {
+  const models = await getGrokModels(apiKey);
+  if (models.length === 0) {
+    return requestedModel;
+  }
+
+  if (models.includes(requestedModel)) {
+    return requestedModel;
+  }
+
+  if (isVision) {
+    const visionOrder = ["grok-2-vision-latest", "grok-2-vision", "grok-2-vision-1212", "grok-vision-beta"];
+    for (const model of visionOrder) {
+      if (models.includes(model)) return model;
+    }
+    const anyVision = models.find(m => m.toLowerCase().includes("vision"));
+    if (anyVision) return anyVision;
+  } else {
+    const textOrder = ["grok-2-latest", "grok-2", "grok-2-1212", "grok-beta"];
+    for (const model of textOrder) {
+      if (models.includes(model)) return model;
+    }
+  }
+
+  return models[0] || requestedModel;
+}
+
+/**
  * Call Grok API via standard fetch (OpenAI-compatible)
  */
 async function callGrok(systemPrompt: string, messages: { role: string; content: any }[], model?: string): Promise<string> {
@@ -111,7 +162,7 @@ async function callGrok(systemPrompt: string, messages: { role: string; content:
   if (!apiKey) {
     throw new Error("GROK_API_KEY is not configured in settings or environment variables");
   }
-  const grokModel = model || settings.grokModel || "grok-2-1212";
+  const requestedModel = model || settings.grokModel || "grok-2";
 
   const requestMessages = [];
   if (systemPrompt) {
@@ -119,7 +170,14 @@ async function callGrok(systemPrompt: string, messages: { role: string; content:
   }
   requestMessages.push(...messages);
 
-  const res = await fetch("https://api.xai.com/v1/chat/completions", {
+  // Auto-detect vision requirement from message content structures
+  const isVision = requestMessages.some(m => 
+    Array.isArray(m.content) && m.content.some((c: any) => c.type === "image_url")
+  );
+
+  const grokModel = await resolveGrokModel(apiKey, requestedModel, isVision);
+
+  const res = await fetch("https://api.x.ai/v1/chat/completions", {
     method: "POST",
     headers: {
       "Authorization": `Bearer ${apiKey}`,
@@ -297,7 +355,7 @@ export async function solveHomework(base64ImageWithHeader: string): Promise<stri
           ]
         }
       ];
-      const modelToUse = settings.grokModel?.includes("vision") ? settings.grokModel : "grok-2-1212";
+      const modelToUse = settings.grokModel?.includes("vision") ? settings.grokModel : "grok-2";
       return await callGrok("", grokMessages, modelToUse);
     } catch (err: any) {
       console.warn("Grok API GDZ failed, using mock fallback:", err);
@@ -521,8 +579,9 @@ export async function testAiConnection(
     if (!apiKey) {
       throw new Error("Ключ GROK_API_KEY не задан ни в настройках, ни в переменных окружения (.env)");
     }
-    const modelToUse = config.grokModel || "grok-2-1212";
-    const res = await fetch("https://api.xai.com/v1/chat/completions", {
+    const requestedModel = config.grokModel || "grok-2";
+    const modelToUse = await resolveGrokModel(apiKey, requestedModel, false);
+    const res = await fetch("https://api.x.ai/v1/chat/completions", {
       method: "POST",
       headers: {
         "Authorization": `Bearer ${apiKey}`,
@@ -540,7 +599,14 @@ export async function testAiConnection(
 
     if (!res.ok) {
       const errorText = await res.text();
-      throw new Error(`Grok API вернул код ошибки ${res.status}: ${errorText}`);
+      let extraInfo = "";
+      try {
+        const availableModels = await getGrokModels(apiKey);
+        if (availableModels.length > 0) {
+          extraInfo = ` Доступные модели для вашего API-ключа: ${availableModels.join(", ")}. Пожалуйста, укажите одну из них в настройках модели.`;
+        }
+      } catch (_) {}
+      throw new Error(`Grok API вернул код ошибки ${res.status}: ${errorText}.${extraInfo}`);
     }
 
     const data: any = await res.json();

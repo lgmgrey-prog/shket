@@ -1572,9 +1572,9 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Модель Grok (для xAI):</label>
                     <input
                       type="text"
-                      value={settings.grokModel || "grok-2-1212"}
+                      value={settings.grokModel || "grok-2"}
                       onChange={(e) => setSettings({ ...settings, grokModel: e.target.value })}
-                      placeholder="grok-2-1212"
+                      placeholder="grok-2"
                       className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
                     />
                   </div>
@@ -1627,7 +1627,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 )}
 
                 <div className="bg-slate-50 border border-brand-border rounded-xl p-3.5 text-[11px] text-slate-500 leading-relaxed font-normal">
-                  💡 <strong>Подсказка:</strong> Для решения домашнего задания по фото через <strong>Grok</strong>, убедитесь, что вы используете модель с поддержкой зрения (vision), либо оставьте <code>grok-2-1212</code>. Для обработки голосовых сообщений и видеокружков всегда задействуется Gemini (требуется наличие ключа в .env или в поле выше) для точного распознавания речи.
+                  💡 <strong>Подсказка:</strong> Для решения домашнего задания по фото через <strong>Grok</strong>, убедитесь, что вы используете модель с поддержкой зрения (vision), либо оставьте <code>grok-2</code>. Для обработки голосовых сообщений и видеокружков всегда задействуется Gemini (требуется наличие ключа в .env или в поле выше) для точного распознавания речи.
                 </div>
 
                 <div className="flex gap-4">
@@ -2935,6 +2935,30 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 <p className="text-[11px] text-slate-500 leading-normal font-normal">
                   Отправляется пользователям без премиум-аккаунта, которые еще не подписались на обязательный спонсорский канал. В тексте можно использовать шаблонные переменные <code>{"{channel_name}"}</code> и <code>{"{channel_url}"}</code>. Бот автоматически добавит кнопку подписки и кнопку проверки "✅ Я подписался"!
                 </p>
+
+                {/* Sponser channel configuration directly here too! */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 bg-white p-4 rounded-xl border border-brand-border">
+                  <div className="space-y-1.5">
+                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на спонсорский канал (ОП):</label>
+                    <input
+                      type="text"
+                      value={settings.requiredChannelUrl || ""}
+                      onChange={(e) => setSettings({ ...settings, requiredChannelUrl: e.target.value })}
+                      placeholder="https://t.me/your_channel"
+                      className="w-full bg-slate-50 border border-brand-border rounded-xl p-2.5 text-slate-950 font-medium font-sans focus:outline-none focus:border-indigo-500 text-xs"
+                    />
+                  </div>
+                  <div className="space-y-1.5">
+                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Название канала (для UI / кнопок):</label>
+                    <input
+                      type="text"
+                      value={settings.requiredChannelName || ""}
+                      onChange={(e) => setSettings({ ...settings, requiredChannelName: e.target.value })}
+                      placeholder="Напр: НейроШкЕТ Новости"
+                      className="w-full bg-slate-50 border border-brand-border rounded-xl p-2.5 text-slate-950 font-medium font-sans focus:outline-none focus:border-indigo-500 text-xs"
+                    />
+                  </div>
+                </div>
 
                 <div className="space-y-2">
                   <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Текст сообщения об ОП:</label>
