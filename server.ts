@@ -969,8 +969,9 @@ async function startServer() {
                              message.reply_to_message.from && 
                              String(message.reply_to_message.from.username).toLowerCase() === botUser.toLowerCase();
 
-        // 7% chance to randomly reply to casual text messages in groups (excluding photos to prevent unrequested costly API calls)
-        const isRandomReply = !isCommand && !message.photo && text.trim().length > 0 && Math.random() < 0.07;
+        // Chance to randomly reply to casual text messages in groups (excluding photos to prevent unrequested costly API calls)
+        const randomChance = settings.groupRandomReplyChance !== undefined ? settings.groupRandomReplyChance : 7;
+        const isRandomReply = !isCommand && !message.photo && text.trim().length > 0 && Math.random() < (randomChance / 100);
 
         if (!isCommand && !isMentioned && !isReplyToBot && !isRandomReply) {
           // Ignore casual messages in groups to avoid spam

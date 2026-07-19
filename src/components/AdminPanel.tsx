@@ -2284,6 +2284,26 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                       />
                     </div>
 
+                    <div className="mt-2.5">
+                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Вероятность авто-ответов на обычные сообщения в группе (%):</label>
+                      <div className="flex items-center gap-3">
+                        <input
+                          type="range"
+                          min="0"
+                          max="100"
+                          value={settings.groupRandomReplyChance !== undefined ? settings.groupRandomReplyChance : 7}
+                          onChange={(e) => setSettings({ ...settings, groupRandomReplyChance: parseInt(e.target.value) })}
+                          className="flex-1 accent-indigo-600 h-2 bg-slate-200 rounded-lg cursor-pointer animate-fade-in"
+                        />
+                        <span className="font-bold text-slate-700 w-12 text-center text-xs p-1.5 bg-white border border-brand-border rounded-lg shadow-xs">
+                          {settings.groupRandomReplyChance !== undefined ? settings.groupRandomReplyChance : 7}%
+                        </span>
+                      </div>
+                      <p className="text-[10px] text-slate-400 mt-1 font-normal italic leading-relaxed">
+                        Установите на <strong>0%</strong>, чтобы бот в группах отвечал <strong>только</strong> тогда, когда к нему обращаются напрямую (по упоминанию @username или ответом на его сообщение). При значении выше 0% бот будет изредка случайно встревать в обычный диалог участников группы.
+                      </p>
+                    </div>
+
                     <div>
                       <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Кнопки под сообщением</label>
                       <div className="flex flex-wrap gap-2 mb-3">
@@ -2860,6 +2880,26 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
                     placeholder="https://example.com/image.jpg"
                   />
+                </div>
+
+                <div className="space-y-2 mt-3 bg-white p-4.5 rounded-xl border border-brand-border">
+                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Вероятность авто-ответов на обычные сообщения в группе (%):</label>
+                  <div className="flex items-center gap-3">
+                    <input
+                      type="range"
+                      min="0"
+                      max="100"
+                      value={settings.groupRandomReplyChance !== undefined ? settings.groupRandomReplyChance : 7}
+                      onChange={(e) => setSettings({ ...settings, groupRandomReplyChance: parseInt(e.target.value) })}
+                      className="flex-1 accent-indigo-600 h-2 bg-slate-200 rounded-lg cursor-pointer"
+                    />
+                    <span className="font-bold text-slate-700 w-12 text-center text-xs p-1.5 bg-white border border-brand-border rounded-lg shadow-xs">
+                      {settings.groupRandomReplyChance !== undefined ? settings.groupRandomReplyChance : 7}%
+                    </span>
+                  </div>
+                  <p className="text-[10px] text-slate-400 mt-1 font-normal italic leading-relaxed">
+                    Установите на <strong>0%</strong>, чтобы бот в группах отвечал <strong>только</strong> тогда, когда к нему обращаются напрямую (по упоминанию @username или ответом на его сообщение). При значении выше 0% бот будет изредка случайно встревать в обычный диалог участников группы.
+                  </p>
                 </div>
 
                 {/* Inline buttons list editor for groups */}

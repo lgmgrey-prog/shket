@@ -131,6 +131,7 @@ export interface DbSettings {
   subMsg?: BotMessageTemplate;
   totalGdzSolved?: number;
   totalMessagesChat?: number;
+  groupRandomReplyChance?: number;
 }
 
 export interface DbSchema {
@@ -447,6 +448,7 @@ export class Database {
             messageFloodLimitPremium: 20,
             adFrequencyHours: 4,
             adMessageInterval: 5,
+            groupRandomReplyChance: 7,
             tgBotToken: "",
             tgBotUsername: "",
             tgWebhookUrl: "",

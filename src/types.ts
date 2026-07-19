@@ -120,6 +120,7 @@ export interface DbSettings {
   subMsg?: BotMessageTemplate;
   totalGdzSolved?: number;
   totalMessagesChat?: number;
+  groupRandomReplyChance?: number;
 }
 
 export interface SystemStats {
