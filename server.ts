@@ -123,6 +123,83 @@ function syncTop5Premium() {
   });
 }
 
+// Check if user is over their daily quiz answer limit
+function checkQuizLimit(userId: string): { isOver: boolean; current: number; limit: number; message: string } {
+  const user = dbInstance.findUser(userId);
+  if (!user) {
+    return { isOver: false, current: 0, limit: 5, message: "" };
+  }
+  
+  const today = new Date().toDateString();
+  const lastQuizDate = user.lastQuizAt ? new Date(user.lastQuizAt).toDateString() : "";
+  let quizzesTodayCount = user.quizzesToday || 0;
+  if (lastQuizDate !== today) {
+    quizzesTodayCount = 0;
+  }
+  
+  const settings = dbInstance.getSettings();
+  const quizLimit = user.isPremium 
+    ? (settings.quizDailyLimitPremium !== undefined ? settings.quizDailyLimitPremium : 50)
+    : (settings.quizDailyLimitFree !== undefined ? settings.quizDailyLimitFree : 5);
+    
+  if (quizzesTodayCount >= quizLimit) {
+    const text = `⚠️ **Бро, лимит квизов исчерпан!**\n\nТы ответил сегодня на *${quizzesTodayCount}/${quizLimit}* квизов.\n\nОграничение составляет:\n• Для обычных: **${settings.quizDailyLimitFree !== undefined ? settings.quizDailyLimitFree : 5}** квизов в день\n• Для Премиум: **${settings.quizDailyLimitPremium !== undefined ? settings.quizDailyLimitPremium : 50}** квизов в день\n\n👑 Купи подписку /buy для расширенного лимита!`;
+    return { isOver: true, current: quizzesTodayCount, limit: quizLimit, message: text };
+  }
+  
+  return { isOver: false, current: quizzesTodayCount, limit: quizLimit, message: "" };
+}
+
+// Generate the global quiz leaderboard text formatted for Telegram
+function getGlobalLeaderboardText(currentUserId?: string): string {
+  const results = dbInstance.getQuizResults();
+  const totals: Record<string, { username: string; points: number }> = {};
+  
+  results.forEach((r) => {
+    if (!totals[r.userId]) {
+      totals[r.userId] = { username: r.username, points: 0 };
+    }
+    totals[r.userId].points += r.points;
+  });
+  
+  const sorted = Object.entries(totals)
+    .map(([userId, info]) => ({ userId, username: info.username, points: info.points }))
+    .sort((a, b) => b.points - a.points);
+    
+  let text = "🏆 **ОБЩИЙ РЕЙТИНГ ИГРОКОВ (КВИЗЫ)** 🏆\n\n";
+  if (sorted.length === 0) {
+    text += "Пока никто не набрал очков. Стань первым! 🚀";
+    return text;
+  }
+  
+  const topCount = Math.min(sorted.length, 10);
+  for (let i = 0; i < topCount; i++) {
+    const item = sorted[i];
+    let medal = "🔹";
+    if (i === 0) medal = "🥇";
+    else if (i === 1) medal = "🥈";
+    else if (i === 2) medal = "🥉";
+    
+    const isSelf = item.userId === currentUserId ? " (Ты) 👈" : "";
+    text += `${medal} ${i + 1}. *${item.username}* — **${item.points}** очков${isSelf}\n`;
+  }
+  
+  // Show user's own position if they are not in the top 10
+  if (currentUserId) {
+    const selfIndex = sorted.findIndex((p) => p.userId === currentUserId);
+    if (selfIndex >= topCount) {
+      const selfItem = sorted[selfIndex];
+      text += `\n— — — — — — — — — —\n🏃‍♂️ ${selfIndex + 1}. *${selfItem.username}* — **${selfItem.points}** очков (Ты) 👈`;
+    } else if (selfIndex === -1) {
+      // User has 0 points
+      text += `\n— — — — — — — — — —\n🏃‍♂️ #${sorted.length + 1}. Ты пока не набрал очков в квизах! Пройди квиз, чтобы попасть в таблицу! 🎒`;
+    }
+  }
+  
+  text += "\n\n🎁 **Напоминаем:** Игроки из Топ-5 рейтинга автоматически получают **БЕСПЛАТНЫЙ ПРЕМИУМ** статус каждый раз при синхронизации рейтинга! Дерзай! 👑";
+  return text;
+}
+
 // Check if user is subscribed to the mandatory channel configured in settings
 async function isSubscribedToRequiredChannel(token: string, userId: string): Promise<boolean> {
   const settings = dbInstance.getSettings();
@@ -1393,6 +1470,12 @@ async function startServer() {
       }
 
       if (text === "📚 Пройти Квиз" || text === "/quiz") {
+        const limitCheck = checkQuizLimit(userId);
+        if (limitCheck.isOver) {
+          await sendTelegramMessage(token, chatId, limitCheck.message, { parse_mode: "Markdown" });
+          return;
+        }
+
         const quizzes = dbInstance.getQuizzes();
         if (quizzes.length === 0) {
           await sendTelegramMessage(token, chatId, "Квизы временно недоступны.");
@@ -1416,8 +1499,14 @@ async function startServer() {
         return;
       }
 
+      if (text === "🏆 Общий рейтинг" || text === "/top" || text === "/leaderboard" || text === "🏆 Рейтинг" || text === "Таблица лидеров") {
+        const textLeaderboard = getGlobalLeaderboardText(userId);
+        await sendTelegramMessage(token, chatId, textLeaderboard, { parse_mode: "Markdown" });
+        return;
+      }
+
       if (text === "🔥 Свежий анекдот" || text === "/joke") {
-        const joke = await generateTeacherJoke();
+        const joke = await generateTeacherJoke(user?.grade);
         const inlineKeyboard = {
           inline_keyboard: [
             [{ text: "🔥 Новый анекдот", callback_data: "new_joke" }]
@@ -1525,7 +1614,10 @@ async function startServer() {
         const inlineKeyboard = {
           inline_keyboard: [
             [{ text: "➕ Добавить ШкЕТа в группу", url: `https://t.me/${botUser}?startgroup=true`, style: "success" }],
-            [{ text: "🎒 Изменить класс обучения", callback_data: "change_grade_trigger", style: "primary" }]
+            [
+              { text: "🎒 Изменить класс обучения", callback_data: "change_grade_trigger", style: "primary" },
+              { text: "🏆 Общий рейтинг", callback_data: "cmd_leaderboard" }
+            ]
           ]
         };
 
@@ -1664,6 +1756,17 @@ async function startServer() {
       }
 
       if (cbData === "cmd_quiz") {
+        const limitCheck = checkQuizLimit(userId);
+        if (limitCheck.isOver) {
+          await sendTelegramMessage(token, chatId, limitCheck.message, { parse_mode: "Markdown" });
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ callback_query_id: cb.id, text: "Лимит квизов исчерпан!" })
+          }).catch(() => {});
+          return;
+        }
+
         const quizzes = dbInstance.getQuizzes();
         if (quizzes.length === 0) {
           await sendTelegramMessage(token, chatId, "Квизы временно недоступны.");
@@ -1694,7 +1797,7 @@ async function startServer() {
       }
 
       if (cbData === "cmd_joke") {
-        const joke = await generateTeacherJoke();
+        const joke = await generateTeacherJoke(user?.grade);
         const inlineKeyboard = {
           inline_keyboard: [
             [{ text: "🔥 Новый анекдот", callback_data: "new_joke" }]
@@ -1837,6 +1940,18 @@ async function startServer() {
         const quiz = dbInstance.getQuizzes().find(q => q.id === quizId);
         if (!quiz) return;
 
+        // Check if user is over their daily limit BEFORE we increment it
+        const limitCheck = checkQuizLimit(userId);
+        if (limitCheck.isOver) {
+          await sendTelegramMessage(token, chatId, limitCheck.message, { parse_mode: "Markdown" });
+          await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ callback_query_id: cb.id, text: "Лимит квизов исчерпан!" })
+          }).catch(() => {});
+          return;
+        }
+
         const isCorrect = selectedOptIdx === quiz.correctIndex;
         let notificationText = "";
 
@@ -1846,7 +1961,36 @@ async function startServer() {
           
           // Re-evaluate Top 5 players and grant/revoke premium status
           syncTop5Premium();
+        } else {
+          notificationText = "❌ Неверно";
+        }
 
+        // Increment the user's daily quiz count
+        const today = new Date().toDateString();
+        const lastQuizDate = user.lastQuizAt ? new Date(user.lastQuizAt).toDateString() : "";
+        let quizzesTodayCount = user.quizzesToday || 0;
+        if (lastQuizDate !== today) {
+          quizzesTodayCount = 0;
+        }
+
+        dbInstance.updateUser(userId, {
+          quizzesToday: quizzesTodayCount + 1,
+          lastQuizAt: new Date().toISOString()
+        });
+
+        // Calculate user points and rank after updating the result
+        const updatedResults = dbInstance.getQuizResults();
+        const userPointsMap: Record<string, number> = {};
+        updatedResults.forEach(r => {
+          userPointsMap[r.userId] = (userPointsMap[r.userId] || 0) + r.points;
+        });
+        const sortedPlayers = Object.keys(userPointsMap)
+          .map(uid => ({ userId: uid, points: userPointsMap[uid] }))
+          .sort((a, b) => b.points - a.points);
+        const userRank = sortedPlayers.findIndex(p => p.userId === userId) + 1;
+        const userTotalPoints = userPointsMap[userId] || 0;
+
+        if (isCorrect) {
           const praises = [
             "Хорош, бро! Мозг работает как швейцарские часики! 🔥",
             "Красава, уделал эту задачу как нефиг делать! 🧠⚡",
@@ -1855,17 +1999,19 @@ async function startServer() {
           ];
           const randomPraise = praises[Math.floor(Math.random() * praises.length)];
 
-          await sendTelegramMessage(token, chatId, `✅ **Правильно!** Вы ответили верно и заработали **+${quiz.points} очков**!\n\n🎒 *ШкЕТ говорит:* ${randomPraise}`, {
+          await sendTelegramMessage(token, chatId, `✅ **Правильно!** Вы ответили верно и заработали **+${quiz.points} очков**!\n\n🏆 **Твоя статистика:**\n• Всего очков: *${userTotalPoints}* баллов\n• Место в рейтинге: *#${userRank}* из *${sortedPlayers.length}* игроков\n• Ответов сегодня: *${quizzesTodayCount + 1}/${limitCheck.limit}*\n\n🎒 *ШкЕТ говорит:* ${randomPraise}`, {
             reply_markup: {
               inline_keyboard: [
-                [{ text: "📚 Следующий вопрос", callback_data: "cmd_quiz", style: "primary" }]
+                [
+                  { text: "📚 Следующий вопрос", callback_data: "cmd_quiz" },
+                  { text: "🏆 Общий рейтинг", callback_data: "cmd_leaderboard" }
+                ]
               ]
-            }
+            },
+            parse_mode: "Markdown"
           });
         } else {
           const correctOpt = quiz.options[quiz.correctIndex];
-          notificationText = "❌ Неверно";
-
           const roasts = [
             "Мда, бро... С таким успехом домашку за тебя будет делать кот. 🐱",
             "Не угадал. Твоя оценка катится на дно, как и мои надежды. 📉",
@@ -1874,10 +2020,13 @@ async function startServer() {
           ];
           const randomRoast = roasts[Math.floor(Math.random() * roasts.length)];
 
-          await sendTelegramMessage(token, chatId, `❌ **Неправильно!**\n\nВерный ответ: *${correctOpt}*.\n\n🎒 *ШкЕТ говорит:* ${randomRoast}`, {
+          await sendTelegramMessage(token, chatId, `❌ **Неправильно!**\n\nВерный ответ: *${correctOpt}*.\n\n🏆 **Твоя статистика:**\n• Всего очков: *${userTotalPoints}* баллов\n• Место в рейтинге: *#${userRank || sortedPlayers.length + 1}* из *${sortedPlayers.length}* игроков\n• Ответов сегодня: *${quizzesTodayCount + 1}/${limitCheck.limit}*\n\n🎒 *ШкЕТ говорит:* ${randomRoast}`, {
             reply_markup: {
               inline_keyboard: [
-                [{ text: "📚 Следующий вопрос", callback_data: "cmd_quiz", style: "primary" }]
+                [
+                  { text: "📚 Следующий вопрос", callback_data: "cmd_quiz" },
+                  { text: "🏆 Общий рейтинг", callback_data: "cmd_leaderboard" }
+                ]
               ]
             },
             parse_mode: "Markdown"
@@ -1993,7 +2142,7 @@ async function startServer() {
 
       // B2. Handle New Joke Callback
       if (cbData === "new_joke") {
-        const joke = await generateTeacherJoke();
+        const joke = await generateTeacherJoke(user?.grade);
         const inlineKeyboard = {
           inline_keyboard: [
             [{ text: "🔥 Новый анекдот", callback_data: "new_joke" }]
@@ -2007,6 +2156,18 @@ async function startServer() {
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ callback_query_id: cb.id, text: "Держи свежий анекдот!" })
+        }).catch(() => {});
+        return;
+      }
+
+      // B5. Handle Leaderboard Callback
+      if (cbData === "cmd_leaderboard") {
+        const textLeaderboard = getGlobalLeaderboardText(userId);
+        await sendTelegramMessage(token, chatId, textLeaderboard, { parse_mode: "Markdown" });
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id })
         }).catch(() => {});
         return;
       }

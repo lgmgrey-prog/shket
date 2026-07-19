@@ -24,6 +24,8 @@ export interface DbUser {
   grade?: string;
   lastAdShownAt?: string | null;
   messagesSinceLastAd?: number;
+  quizzesToday?: number;
+  lastQuizAt?: string | null;
 }
 
 export interface DbAd {
@@ -109,6 +111,8 @@ export interface DbSettings {
   premiumMessagesLimit: number;
   freeGdzLimit: number;
   premiumGdzLimit: number;
+  quizDailyLimitFree?: number;
+  quizDailyLimitPremium?: number;
   contextDepthFree: number;
   contextDepthPremium: number;
   messageFloodLimitFree: number;
@@ -443,6 +447,8 @@ export class Database {
             premiumMessagesLimit: 9999,
             freeGdzLimit: 3,
             premiumGdzLimit: 9999,
+            quizDailyLimitFree: 5,
+            quizDailyLimitPremium: 50,
             contextDepthFree: 15,
             contextDepthPremium: 25,
             messageFloodLimitFree: 5,
@@ -525,6 +531,8 @@ export class Database {
         premiumMessagesLimit: 9999,
         freeGdzLimit: 3,
         premiumGdzLimit: 9999,
+        quizDailyLimitFree: 5,
+        quizDailyLimitPremium: 50,
         contextDepthFree: 15,
         contextDepthPremium: 25,
         messageFloodLimitFree: 5,

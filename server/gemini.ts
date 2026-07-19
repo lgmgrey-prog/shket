@@ -408,15 +408,20 @@ export async function solveHomework(base64ImageWithHeader: string, customPrompt?
 }
 
 /**
- * Generate school teacher jokes
+ * Generate school teacher jokes (or other general funny jokes) adapted to user's class/grade.
  */
-export async function generateTeacherJoke(): Promise<string> {
+export async function generateTeacherJoke(grade?: string): Promise<string> {
   const settings = dbInstance.getSettings();
+  const gradeText = grade && grade.trim() ? `для ученика ${grade.trim()} класса` : "для среднего школьного возраста (если класс не указан, делай юмор понятным для всех подростков)";
+  
+  const prompt = `Расскажи один смешной, короткий, дерзкий и саркастичный анекдот или шутку/историю, адаптированную ${gradeText}. 
+Тематика НЕ должна ограничиваться только школой и учителями — пиши на любые жизненные темы: про подростков, родителей, тусовки, современные мемы, технологии, компьютерные игры, отношения или угарный бытовой абсурд. Без жесткой цензуры (но в рамках разумного), чтобы было максимально жизненно и смешно для молодежи. Форматируй текст красиво для Telegram.`;
+
   if (settings.aiProvider === "grok") {
     try {
       return await callGrok(
         "Ты — школьный юморист ШкЕТ. Пиши смешно, коротко и со сленгом.",
-        [{ role: "user", content: "Расскажи один смешной, короткий, дерзкий и саркастичный анекдот про школьных учителей или завуча Марь Ванну. Без жесткой цензуры, чтобы было жизненно для школьников." }]
+        [{ role: "user", content: prompt }]
       );
     } catch (err) {
       return getMockTeacherJoke();
@@ -425,9 +430,9 @@ export async function generateTeacherJoke(): Promise<string> {
 
   try {
     const response = await generateContentWithRetry({
-      contents: "Расскажи один смешной, короткий, дерзкий и саркастичный анекдот про школьных учителей или завуча Марь Ванну. Без жесткой цензуры, чтобы было жизненно для школьников.",
+      contents: prompt,
       config: {
-        systemInstruction: "Ты — школьный юморист ШкЕТ. Пиши смешно, коротко и со сленгом.",
+        systemInstruction: "Ты — школьный юморист ШкЕТ. Пиши смешно, коротко и со сленгом. Не используй LaTeX или сложные символы.",
       },
     });
     return response.text || getMockTeacherJoke();
