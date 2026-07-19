@@ -764,7 +764,7 @@ async function startServer() {
       const firstName = from.first_name || "";
       const lastName = from.last_name || "";
 
-      let text = message.text || "";
+      let text = message.text || message.caption || "";
       const botUser = settings.tgBotUsername || "NeuroShketBot";
 
       // Check if bot is added to a group
@@ -803,14 +803,17 @@ async function startServer() {
 
       // Group chat filtering
       const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
-      if (isGroup && text) {
+      if (isGroup) {
         const isCommand = text.startsWith("/");
         const isMentioned = text.includes(`@${botUser}`);
         const isReplyToBot = message.reply_to_message && 
                              message.reply_to_message.from && 
                              String(message.reply_to_message.from.username).toLowerCase() === botUser.toLowerCase();
 
-        if (!isCommand && !isMentioned && !isReplyToBot) {
+        // 7% chance to randomly reply to casual text messages in groups (excluding photos to prevent unrequested costly API calls)
+        const isRandomReply = !isCommand && !message.photo && text.trim().length > 0 && Math.random() < 0.07;
+
+        if (!isCommand && !isMentioned && !isReplyToBot && !isRandomReply) {
           // Ignore casual messages in groups to avoid spam
           return;
         }
