@@ -187,10 +187,61 @@ function getAdForPosition(position: "start" | "mid" | "gdz" | "pin", userId: str
   return chosenAd;
 }
 
+const processedUpdateIds = new Set<number>();
+
+function isDuplicateUpdate(updateId: number): boolean {
+  if (!updateId) return false;
+  if (processedUpdateIds.has(updateId)) {
+    return true;
+  }
+  processedUpdateIds.add(updateId);
+  // Keep size to 1000 items to prevent memory leaks
+  if (processedUpdateIds.size > 1000) {
+    const firstItem = processedUpdateIds.values().next().value;
+    if (firstItem !== undefined) {
+      processedUpdateIds.delete(firstItem);
+    }
+  }
+  return false;
+}
+
+async function ensureTelegramWebhook() {
+  const settings = dbInstance.getSettings();
+  const token = settings.tgBotToken;
+  const webhookUrl = settings.tgWebhookUrl;
+  if (!token) {
+    addSystemLog("info", "system", "Автонастройка вебхука пропущена: токен не задан");
+    return;
+  }
+  if (!webhookUrl) {
+    addSystemLog("warn", "system", "Автонастройка вебхука пропущена: URL вебхука не задан в настройках");
+    return;
+  }
+
+  addSystemLog("info", "system", `Инициализация вебхука в режиме Production для бота @${settings.tgBotUsername || "bot"} на URL: ${webhookUrl}`);
+  try {
+    const res = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ url: webhookUrl }),
+    });
+    const data = await res.json();
+    addSystemLog("info", "system", "Результат настройки вебхука при старте сервера:", data);
+  } catch (err: any) {
+    addSystemLog("error", "system", `Ошибка при установке вебхука при старте: ${err.message}`);
+  }
+}
+
 let isPollingActive = false;
 let lastUpdateId = 0;
 
 async function startTelegramPolling() {
+  if (process.env.NODE_ENV === "production") {
+    addSystemLog("info", "system", "Режим Production: фоновый пуллинг отключен, активируем автонастройку вебхука...");
+    await ensureTelegramWebhook();
+    return;
+  }
+
   if (isPollingActive) {
     addSystemLog("info", "system", "Запрос на запуск пуллинга отклонен: пуллинг уже активен");
     return;
@@ -739,6 +790,11 @@ async function startServer() {
     const update = req.body;
     if (!update) {
       addSystemLog("warn", "webhook", "Получен пустой вебхук-запрос");
+      return;
+    }
+
+    if (update.update_id && isDuplicateUpdate(update.update_id)) {
+      addSystemLog("info", "webhook", `Пропущено дублирующее обновление (Update ID: ${update.update_id}) для предотвращения задвоения ответов.`);
       return;
     }
 
