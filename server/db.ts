@@ -126,6 +126,7 @@ export interface DbSettings {
   grokModel?: string;
   geminiApiKey?: string;
   geminiBaseUrl?: string;
+  tgApiBaseUrl?: string;
   startMsg?: BotMessageTemplate;
   groupMsg?: BotMessageTemplate;
   subMsg?: BotMessageTemplate;
@@ -459,6 +460,7 @@ export class Database {
             grokApiKey: "",
             grokModel: "grok-2",
             geminiApiKey: "",
+            tgApiBaseUrl: "",
             startMsg: {
               text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
               mediaUrl: "",
@@ -539,6 +541,7 @@ export class Database {
         grokApiKey: "",
         grokModel: "grok-2",
         geminiApiKey: "",
+        tgApiBaseUrl: "",
         totalGdzSolved: 150,
         totalMessagesChat: 1200,
         startMsg: {

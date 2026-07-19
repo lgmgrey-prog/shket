@@ -9,6 +9,24 @@ import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWith
 // Load env variables
 dotenv.config();
 
+// Global fetch interceptor to support custom Telegram API base URL
+const originalFetch = globalThis.fetch;
+globalThis.fetch = function (input: any, init?: any) {
+  let finalInput = input;
+  if (typeof input === "string" && input.startsWith("https://api.telegram.org")) {
+    try {
+      const settings = dbInstance.getSettings();
+      if (settings.tgApiBaseUrl && settings.tgApiBaseUrl.trim()) {
+        const customBase = settings.tgApiBaseUrl.trim().replace(/\/+$/, "");
+        finalInput = input.replace("https://api.telegram.org", customBase);
+      }
+    } catch (e) {
+      // settings might not be initialized yet
+    }
+  }
+  return originalFetch.call(this, finalInput, init);
+} as any;
+
 interface SystemLog {
   id: string;
   timestamp: string;
@@ -953,21 +971,26 @@ async function startServer() {
       }
 
       // Clean bot suffix from group commands (e.g. /start@NeuroShketBot -> /start)
-      if (text) {
-        const suffix = `@${botUser}`;
-        if (text.includes(suffix)) {
-          text = text.replace(suffix, "");
+      if (text && text.startsWith("/")) {
+        const suffix = `@${botUser}`.toLowerCase();
+        const firstSpace = text.indexOf(" ");
+        const commandPart = firstSpace !== -1 ? text.substring(0, firstSpace) : text;
+        const restPart = firstSpace !== -1 ? text.substring(firstSpace) : "";
+        if (commandPart.toLowerCase().includes(suffix)) {
+          const cleanedCommand = commandPart.toLowerCase().replace(suffix, "");
+          text = cleanedCommand + restPart;
         }
       }
 
       // Group chat filtering
       const isGroup = message.chat.type === "group" || message.chat.type === "supergroup";
+      const isMentioned = (message.text || message.caption || "").toLowerCase().includes(`@${botUser.toLowerCase()}`);
+      const isReplyToBot = message.reply_to_message && 
+                           message.reply_to_message.from && 
+                           String(message.reply_to_message.from.username).toLowerCase() === botUser.toLowerCase();
+
       if (isGroup) {
         const isCommand = text.startsWith("/");
-        const isMentioned = text.includes(`@${botUser}`);
-        const isReplyToBot = message.reply_to_message && 
-                             message.reply_to_message.from && 
-                             String(message.reply_to_message.from.username).toLowerCase() === botUser.toLowerCase();
 
         // Chance to randomly reply to casual text messages in groups (excluding photos to prevent unrequested costly API calls)
         const randomChance = settings.groupRandomReplyChance !== undefined ? settings.groupRandomReplyChance : 7;
@@ -976,6 +999,16 @@ async function startServer() {
         if (!isCommand && !isMentioned && !isReplyToBot && !isRandomReply) {
           // Ignore casual messages in groups to avoid spam
           return;
+        }
+      }
+
+      // Strip leading mention from text for AI prompt if it starts with the mention
+      let aiPromptText = text;
+      const mentionPrefix = `@${botUser}`.toLowerCase();
+      if (aiPromptText.toLowerCase().startsWith(mentionPrefix)) {
+        aiPromptText = aiPromptText.substring(mentionPrefix.length).trim();
+        if (!aiPromptText) {
+          aiPromptText = "Привет!";
         }
       }
 
@@ -1142,7 +1175,7 @@ async function startServer() {
             }
 
             // Solve homework!
-            const solution = await solveHomework(base64Image);
+            const solution = await solveHomework(base64Image, aiPromptText);
             dbInstance.incrementTotalGdzSolved();
 
             // Append dynamic GDZ ads if any
@@ -1528,7 +1561,7 @@ async function startServer() {
         body: JSON.stringify({ chat_id: chatId, action: "typing" })
       }).catch(() => {});
 
-      const responseText = await chatWithBot(userId, text);
+      const responseText = await chatWithBot(userId, aiPromptText);
 
       // Append dynamic middle ad if active
       let finalReply = responseText;

@@ -1224,6 +1224,31 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   )}
                 </div>
               )}
+
+              {/* Custom Telegram API URL setting */}
+              <div className="pt-4 border-t border-slate-100 space-y-2">
+                <div className="flex flex-col gap-1.5 text-xs">
+                  <label className="text-slate-600 font-bold text-[10px] uppercase tracking-wider">Пользовательский URL для Telegram API (прокси):</label>
+                  <div className="flex gap-2.5">
+                    <input
+                      type="text"
+                      value={settings.tgApiBaseUrl !== undefined ? settings.tgApiBaseUrl : ""}
+                      onChange={(e) => setSettings({ ...settings, tgApiBaseUrl: e.target.value })}
+                      placeholder="Оставьте пустым для дефолтного https://api.telegram.org"
+                      className="flex-1 bg-white border border-brand-border rounded-xl p-2.5 text-slate-850 font-mono text-xs placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-inner font-semibold"
+                    />
+                    <button
+                      onClick={handleUpdateSettings}
+                      className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-900 text-white font-bold rounded-xl text-[10px] uppercase tracking-wide transition-all shrink-0 cursor-pointer active:scale-95 shadow-xs"
+                    >
+                      Сохранить прокси
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-normal italic leading-relaxed">
+                    Если ваш VPS находится в РФ или другой стране, где заблокирован домен <strong>api.telegram.org</strong>, укажите работающий прокси (например, <code>https://api.telegram.org</code> через свой домен, или публичный реверс-прокси). Бот сразу же станет отправлять и принимать запросы через него!
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* NEW: Yookassa Billing Integration Card */}
