@@ -284,7 +284,25 @@ async function startTelegramPolling() {
     webhookUrl.includes("localhost") || 
     webhookUrl.includes("127.0.0.1")
   );
-  const useWebhook = process.env.NODE_ENV === "production" && !isPreviewUrl;
+
+  let isIpHost = false;
+  if (webhookUrl) {
+    try {
+      const parsed = new URL(webhookUrl);
+      const ipPattern = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+      if (ipPattern.test(parsed.hostname)) {
+        isIpHost = true;
+      }
+    } catch {
+      isIpHost = true;
+    }
+  }
+
+  const useWebhook = process.env.NODE_ENV === "production" && 
+                     webhookUrl && 
+                     webhookUrl.startsWith("https://") && 
+                     !isPreviewUrl && 
+                     !isIpHost;
 
   if (useWebhook) {
     addSystemLog("info", "system", "Активируем режим вебхука (пуллинг отключен), производим автонастройку...");
@@ -475,26 +493,62 @@ async function startServer() {
 
       const botUsername = getMeData.result.username;
 
-      // 2. Set Webhook
+      // 2. Set Webhook if supported and in non-preview env, otherwise delete webhook to fallback to polling
       const hostUrl = getExternalHostUrl(req);
       const webhookUrl = `${hostUrl}/api/tg-webhook`;
 
-      const setWebhookRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ url: webhookUrl }),
-      });
-      const setWebhookData = await setWebhookRes.json();
+      const isPreviewUrl = webhookUrl && (
+        webhookUrl.includes("ais-dev-") || 
+        webhookUrl.includes("ais-pre-") || 
+        webhookUrl.includes("localhost") || 
+        webhookUrl.includes("127.0.0.1")
+      );
 
-      if (!setWebhookData.ok) {
-        return res.status(500).json({ error: "Не удалось установить webhook в Telegram API" });
+      let isIpHost = false;
+      if (webhookUrl) {
+        try {
+          const parsed = new URL(webhookUrl);
+          const ipPattern = /^(?:[0-9]{1,3}\.){3}[0-9]{1,3}$/;
+          if (ipPattern.test(parsed.hostname)) {
+            isIpHost = true;
+          }
+        } catch {
+          isIpHost = true;
+        }
+      }
+
+      const useWebhook = webhookUrl && webhookUrl.startsWith("https://") && !isPreviewUrl && !isIpHost;
+
+      if (useWebhook) {
+        addSystemLog("info", "system", `Пытаемся принудительно установить вебхук: ${webhookUrl}`);
+        const setWebhookRes = await fetch(`https://api.telegram.org/bot${token}/setWebhook`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ url: webhookUrl }),
+        });
+        const setWebhookData = await setWebhookRes.json();
+
+        if (!setWebhookData.ok) {
+          addSystemLog("error", "system", `Не удалось установить вебхук в Telegram API: ${setWebhookData.description}`);
+          return res.status(500).json({ error: `Не удалось установить webhook: ${setWebhookData.description}` });
+        }
+      } else {
+        // Очищаем вебхук в Telegram, чтобы Telegram начал присылать сообщения по getUpdates (long polling)
+        addSystemLog("info", "system", "Хост является IP или превью-окружением: очищаем вебхук для пуллинга...");
+        try {
+          const delRes = await fetch(`https://api.telegram.org/bot${token}/deleteWebhook`);
+          const delData = await delRes.json();
+          addSystemLog("info", "system", "Результат удаления вебхука при настройке бота:", delData);
+        } catch (err: any) {
+          addSystemLog("warn", "system", `Не удалось удалить вебхук при настройке: ${err.message}`);
+        }
       }
 
       // 3. Save into Settings database
       dbInstance.updateSettings({
         tgBotToken: token,
         tgBotUsername: botUsername,
-        tgWebhookUrl: webhookUrl,
+        tgWebhookUrl: useWebhook ? webhookUrl : "",
       });
 
       // Restart long polling for instant sandboxed access

@@ -14,7 +14,7 @@ export default function App() {
             <h1 className="font-extrabold text-slate-900 text-sm tracking-tight flex items-center gap-2">
               Панель Администратора
               <span className="text-[10px] bg-violet-100 text-violet-700 px-2 py-0.5 rounded-none font-bold">
-                v3.3.0
+                v3.4.0
               </span>
             </h1>
             <p className="text-[11px] text-slate-500 mt-0.5">
