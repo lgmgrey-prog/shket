@@ -278,7 +278,15 @@ async function startTelegramPolling() {
   const token = settings.tgBotToken;
   const webhookUrl = settings.tgWebhookUrl;
 
-  if (process.env.NODE_ENV === "production" || (webhookUrl && webhookUrl.trim().startsWith("http"))) {
+  const isPreviewUrl = webhookUrl && (
+    webhookUrl.includes("ais-dev-") || 
+    webhookUrl.includes("ais-pre-") || 
+    webhookUrl.includes("localhost") || 
+    webhookUrl.includes("127.0.0.1")
+  );
+  const useWebhook = process.env.NODE_ENV === "production" && !isPreviewUrl;
+
+  if (useWebhook) {
     addSystemLog("info", "system", "Активируем режим вебхука (пуллинг отключен), производим автонастройку...");
     isPollingActive = false;
     await ensureTelegramWebhook();
