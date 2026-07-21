@@ -121,6 +121,8 @@ export interface DbSettings {
   totalGdzSolved?: number;
   totalMessagesChat?: number;
   groupRandomReplyChance?: number;
+  voiceResponsesMode?: "disabled" | "always" | "premium";
+  voiceResponseName?: string;
 }
 
 export interface SystemStats {

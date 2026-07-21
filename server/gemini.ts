@@ -629,4 +629,37 @@ export async function testAiConnection(
   }
 }
 
+/**
+ * Generate audio speech from text using Google Gemini TTS model
+ */
+export async function generateSpeech(text: string, voiceName?: string): Promise<string | null> {
+  try {
+    const ai = getGeminiClient();
+    const response = await ai.models.generateContent({
+      model: "gemini-3.1-flash-tts-preview",
+      contents: text,
+      config: {
+        responseModalities: ["AUDIO"],
+        speechConfig: {
+          voiceConfig: {
+            prebuiltVoiceConfig: {
+              voiceName: voiceName || "Puck",
+            },
+          },
+        },
+      },
+    });
+
+    const parts = response.candidates?.[0]?.content?.parts;
+    const audioPart = parts?.find((p: any) => p.inlineData && p.inlineData.mimeType?.startsWith("audio/"));
+    if (audioPart && audioPart.inlineData) {
+      return audioPart.inlineData.data;
+    }
+    return null;
+  } catch (err) {
+    console.warn("Failed to generate speech via Gemini:", err);
+    return null;
+  }
+}
+
 

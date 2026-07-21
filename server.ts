@@ -4,7 +4,7 @@ import os from "os";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { dbInstance, DbUser } from "./server/db.js";
-import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWithVoiceOrVideo, testAiConnection } from "./server/gemini.js";
+import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWithVoiceOrVideo, testAiConnection, generateSpeech } from "./server/gemini.js";
 
 // Load env variables
 dotenv.config();
@@ -487,6 +487,78 @@ async function startServer() {
   // Increase body size limit to support base64 images for GDZ
   app.use(express.json({ limit: "15mb" }));
   app.use(express.urlencoded({ limit: "15mb", extended: true }));
+
+  // Helper helper to send Telegram voice message
+  async function sendTelegramVoice(token: string, chatId: string | number, audioBase64: string, extra: any = {}) {
+    try {
+      addSystemLog("info", "api", `Отправка sendVoice в Telegram (Чат ID: ${chatId})`);
+      const formData = new FormData();
+      formData.append("chat_id", String(chatId));
+
+      const buffer = Buffer.from(audioBase64, "base64");
+      const blob = new Blob([buffer], { type: "audio/ogg" });
+      formData.append("voice", blob, "voice.ogg");
+
+      for (const [key, val] of Object.entries(extra)) {
+        if (typeof val === "object") {
+          formData.append(key, JSON.stringify(val));
+        } else {
+          formData.append(key, String(val));
+        }
+      }
+
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendVoice`, {
+        method: "POST",
+        body: formData,
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        addSystemLog("error", "api", `Ошибка ответа Telegram API (sendVoice) для чата ${chatId}`, data);
+      } else {
+        addSystemLog("info", "api", `Голосовое сообщение успешно доставлено в Telegram (Чат ID: ${chatId})`, data);
+      }
+      return data;
+    } catch (err: any) {
+      console.error("sendTelegramVoice failed:", err);
+      addSystemLog("error", "api", `Исключение при вызове Telegram API (sendVoice) (Чат ID: ${chatId})`, { error: err.message, stack: err.stack });
+      return null;
+    }
+  }
+
+  async function sendVoiceResponseIfNeeded(chatId: string | number, text: string, user: DbUser) {
+    try {
+      const settings = dbInstance.getSettings();
+      const voiceMode = settings.voiceResponsesMode || "disabled";
+      const isVoiceEligible = voiceMode === "always" || (voiceMode === "premium" && user.isPremium);
+
+      if (isVoiceEligible) {
+        const token = settings.tgBotToken;
+        if (!token) return;
+
+        // Clean the text from markdown or URLs/emojis so TTS reads it beautifully
+        const cleanText = text
+          .replace(/[*_`\[\]()#]/g, "") // remove markdown syntax
+          .replace(/https?:\/\/\S+/g, "") // remove links
+          .trim();
+
+        if (cleanText) {
+          // Send recording voice status
+          await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ chat_id: chatId, action: "record_voice" })
+          }).catch(() => {});
+
+          const voiceBase64 = await generateSpeech(cleanText, settings.voiceResponseName || "Puck");
+          if (voiceBase64) {
+            await sendTelegramVoice(token, chatId, voiceBase64);
+          }
+        }
+      }
+    } catch (err) {
+      console.error("sendVoiceResponseIfNeeded failed:", err);
+    }
+  }
 
   // Helper helper to send Telegram message
   async function sendTelegramMessage(token: string, chatId: string | number, text: string, extra: any = {}) {
@@ -1335,6 +1407,7 @@ async function startServer() {
             }
 
             await sendTelegramMessage(token, chatId, finalReply, { parse_mode: "Markdown" });
+            sendVoiceResponseIfNeeded(chatId, responseText, user);
           } else {
             await sendTelegramMessage(token, chatId, "❌ Не удалось загрузить аудио/видео с серверов Telegram.");
           }
@@ -1669,6 +1742,7 @@ async function startServer() {
       }
 
       await sendTelegramMessage(token, chatId, finalReply, { parse_mode: "Markdown" });
+      sendVoiceResponseIfNeeded(chatId, responseText, user);
       return;
     }
 
@@ -2409,7 +2483,25 @@ async function startServer() {
       });
     }
 
-    res.json({ text: responseText, ad: adToShow });
+    let voiceAudio = null;
+    try {
+      const voiceMode = settings.voiceResponsesMode || "disabled";
+      const isVoiceEligible = voiceMode === "always" || (voiceMode === "premium" && user.isPremium);
+      if (isVoiceEligible) {
+        // Clean text for TTS
+        const cleanText = responseText
+          .replace(/[*_`\[\]()#]/g, "")
+          .replace(/https?:\/\/\S+/g, "")
+          .trim();
+        if (cleanText) {
+          voiceAudio = await generateSpeech(cleanText, settings.voiceResponseName || "Puck");
+        }
+      }
+    } catch (err) {
+      console.error("Web chat voice generation failed:", err);
+    }
+
+    res.json({ text: responseText, ad: adToShow, voiceAudio });
   });
 
   // Submit HW Photo (GDZ Solver)
@@ -2811,6 +2903,36 @@ async function startServer() {
   // Delete Style
   app.delete("/api/admin/styles/:id", (req, res) => {
     const success = dbInstance.deleteStyle(req.params.id);
+    res.json({ success });
+  });
+
+  // Get Quizzes
+  app.get("/api/admin/quizzes", (req, res) => {
+    res.json(dbInstance.getQuizzes());
+  });
+
+  // Add/Update Quiz
+  app.post("/api/admin/quizzes", (req, res) => {
+    const { id, question, options, correctIndex, subject, points } = req.body;
+    if (id) {
+      const updated = dbInstance.updateQuiz(id, { question, options, correctIndex, subject, points });
+      if (!updated) return res.status(404).json({ error: "Quiz not found" });
+      return res.json(updated);
+    } else {
+      const newQuiz = dbInstance.createQuiz({
+        question,
+        options,
+        correctIndex: parseInt(correctIndex),
+        subject,
+        points: parseInt(points) || 10,
+      });
+      return res.json(newQuiz);
+    }
+  });
+
+  // Delete Quiz
+  app.delete("/api/admin/quizzes/:id", (req, res) => {
+    const success = dbInstance.deleteQuiz(req.params.id);
     res.json({ success });
   });
 

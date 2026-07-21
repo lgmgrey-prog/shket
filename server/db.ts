@@ -137,6 +137,8 @@ export interface DbSettings {
   totalGdzSolved?: number;
   totalMessagesChat?: number;
   groupRandomReplyChance?: number;
+  voiceResponsesMode?: "disabled" | "always" | "premium";
+  voiceResponseName?: string;
 }
 
 export interface DbSchema {
@@ -467,6 +469,8 @@ export class Database {
             grokModel: "grok-2",
             geminiApiKey: "",
             tgApiBaseUrl: "",
+            voiceResponsesMode: "disabled",
+            voiceResponseName: "Puck",
             startMsg: {
               text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
               mediaUrl: "",
@@ -826,6 +830,35 @@ export class Database {
     this.data.quizResults.push(newResult);
     this.save();
     return newResult;
+  }
+
+  public createQuiz(quiz: Omit<DbQuiz, "id">): DbQuiz {
+    const newQuiz: DbQuiz = {
+      id: "q_" + Math.random().toString(36).substr(2, 9),
+      ...quiz,
+    };
+    this.data.quizzes.push(newQuiz);
+    this.save();
+    return newQuiz;
+  }
+
+  public updateQuiz(id: string, updates: Partial<Omit<DbQuiz, "id">>): DbQuiz | undefined {
+    const q = this.data.quizzes.find((quiz) => quiz.id === id);
+    if (q) {
+      Object.assign(q, updates);
+      this.save();
+    }
+    return q;
+  }
+
+  public deleteQuiz(id: string): boolean {
+    const initialLen = this.data.quizzes.length;
+    this.data.quizzes = this.data.quizzes.filter((quiz) => quiz.id !== id);
+    if (this.data.quizzes.length !== initialLen) {
+      this.save();
+      return true;
+    }
+    return false;
   }
 
   // Payments

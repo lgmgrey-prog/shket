@@ -32,7 +32,8 @@ import {
   CreditCard,
   ToggleLeft,
   ToggleRight,
-  MessageSquare
+  MessageSquare,
+  HelpCircle
 } from "lucide-react";
 import { DbUser, DbStyle, DbAd, DbCampaign, DbPayment, DbBroadcast, DbSettings, SystemStats, AdminStats, SystemLog } from "../types";
 
@@ -41,7 +42,7 @@ interface AdminPanelProps {
 }
 
 export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
-  const [activeTab, setActiveTab] = useState<"stats" | "users" | "styles" | "ads" | "broadcasts" | "system" | "logs" | "templates">("stats");
+  const [activeTab, setActiveTab] = useState<"stats" | "users" | "styles" | "ads" | "broadcasts" | "system" | "logs" | "templates" | "quizzes">("stats");
 
   // Auth states
   const [isAuthenticated, setIsAuthenticated] = useState<boolean>(() => {
@@ -69,6 +70,10 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
   const [campaigns, setCampaigns] = useState<DbCampaign[]>([]);
   const [payments, setPayments] = useState<DbPayment[]>([]);
   const [broadcasts, setBroadcasts] = useState<DbBroadcast[]>([]);
+  const [quizzes, setQuizzes] = useState<any[]>([]);
+  const [quizForm, setQuizForm] = useState({ id: "", question: "", options: ["", "", "", ""], correctIndex: 0, subject: "", points: 10 });
+  const [quizEditMode, setQuizEditMode] = useState(false);
+  const [quizToDeleteConfirmId, setQuizToDeleteConfirmId] = useState<string | null>(null);
   const [settings, setSettings] = useState<DbSettings | null>(null);
   const [system, setSystem] = useState<SystemStats | null>(null);
 
@@ -254,6 +259,16 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
       const setData = await setRes.json();
       setSettings(setData);
 
+      try {
+        const quizRes = await fetch("/api/admin/quizzes");
+        if (quizRes.ok) {
+          const quizData = await quizRes.json();
+          setQuizzes(quizData);
+        }
+      } catch (err) {
+        console.error("Failed to fetch quizzes", err);
+      }
+
       const sysRes = await fetch("/api/admin/system");
       const sysData = await sysRes.json();
       setSystem(sysData);
@@ -437,6 +452,75 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
       showToast("Ошибка при удалении", "error");
     } finally {
       setStyleToDeleteConfirmId(null);
+    }
+  };
+
+  // Quizzes CRUD
+  const handleSaveQuiz = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!quizForm.question || !quizForm.subject) {
+      showToast("Пожалуйста, заполните вопрос и предмет", "error");
+      return;
+    }
+    if (quizForm.options.some((o) => !o.trim())) {
+      showToast("Пожалуйста, заполните все 4 варианта ответа", "error");
+      return;
+    }
+    try {
+      const res = await fetch("/api/admin/quizzes", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(quizForm),
+      });
+      if (res.ok) {
+        showToast(quizEditMode ? "Квиз успешно обновлен!" : "Новый квиз успешно добавлен!", "success");
+        setQuizForm({ id: "", question: "", options: ["", "", "", ""], correctIndex: 0, subject: "", points: 10 });
+        setQuizEditMode(false);
+        fetchAdminData();
+      } else {
+        showToast("Ошибка при сохранении квиза", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Ошибка при отправке запроса", "error");
+    }
+  };
+
+  const handleEditQuizClick = (quiz: any) => {
+    setQuizForm({
+      id: quiz.id,
+      question: quiz.question,
+      options: [...quiz.options],
+      correctIndex: quiz.correctIndex,
+      subject: quiz.subject,
+      points: quiz.points,
+    });
+    setQuizEditMode(true);
+    showToast("Квиз загружен в форму редактирования", "info");
+  };
+
+  const handleDeleteQuiz = async (id: string) => {
+    if (quizToDeleteConfirmId !== id) {
+      setQuizToDeleteConfirmId(id);
+      showToast("Нажмите «Удалить» еще раз для подтверждения удаления квиза", "info");
+      setTimeout(() => setQuizToDeleteConfirmId(null), 5000);
+      return;
+    }
+
+    try {
+      const res = await fetch(`/api/admin/quizzes/${id}`, { method: "DELETE" });
+      const data = await res.json();
+      if (data.success) {
+        showToast("Квиз успешно удален", "success");
+        fetchAdminData();
+      } else {
+        showToast("Ошибка при удалении квиза", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Ошибка при отправке запроса на удаление", "error");
+    } finally {
+      setQuizToDeleteConfirmId(null);
     }
   };
 
@@ -768,6 +852,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
           { id: "users", label: "Ученики", icon: Users },
           { id: "styles", label: "Стили & Настройки", icon: Sparkles },
           { id: "templates", label: "Сообщения Бота", icon: MessageSquare },
+          { id: "quizzes", label: "Настройки Квизов", icon: HelpCircle },
           { id: "ads", label: "Реклама", icon: Megaphone },
           { id: "broadcasts", label: "Рассылки", icon: Bell },
           { id: "system", label: "Система", icon: Database },
@@ -1672,6 +1757,289 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   </button>
                 </div>
               </form>
+            </div>
+          </div>
+        )}
+
+        {/* TAB: QUIZZES & VOICE SETTINGS */}
+        {activeTab === "quizzes" && settings && (
+          <div className="space-y-6 animate-fade-in">
+            {/* Section 1: Limits & Voice */}
+            <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-5 shadow-xs">
+              <div className="flex items-center gap-2 border-b border-brand-border pb-3">
+                <HelpCircle className="w-5 h-5 text-indigo-600" />
+                <h3 className="font-bold text-slate-800 text-sm">
+                  ⚙️ Настройки ограничений квизов и голосовых ответов
+                </h3>
+              </div>
+
+              <form onSubmit={handleUpdateSettings} className="space-y-4">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {/* Free quiz limit */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Лимит ответов на квизы в день (Бесплатные)
+                    </label>
+                    <input
+                      type="number"
+                      value={settings.quizDailyLimitFree ?? 3}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          quizDailyLimitFree: parseInt(e.target.value) || 0,
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    />
+                  </div>
+
+                  {/* Premium quiz limit */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Лимит ответов на квизы в день (Премиум)
+                    </label>
+                    <input
+                      type="number"
+                      value={settings.quizDailyLimitPremium ?? 15}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          quizDailyLimitPremium: parseInt(e.target.value) || 0,
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    />
+                  </div>
+
+                  {/* Voice responses mode */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Голосовые ответы бота (TTS)
+                    </label>
+                    <select
+                      value={settings.voiceResponsesMode || "disabled"}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          voiceResponsesMode: e.target.value as any,
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    >
+                      <option value="disabled">🔇 Отключено (Отвечает только текстом)</option>
+                      <option value="always">🔊 Включено для всех (Голос + Текст)</option>
+                      <option value="premium">💎 Только для Премиум пользователей</option>
+                    </select>
+                  </div>
+
+                  {/* Voice character selection */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
+                      Персонаж озвучки (Голос Gemini)
+                    </label>
+                    <select
+                      value={settings.voiceResponseName || "Puck"}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          voiceResponseName: e.target.value,
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    >
+                      <option value="Puck">🧚 Puck (Дерзкий, весёлый мальчик)</option>
+                      <option value="Charon">🧔 Charon (Спокойный, мудрый мужской)</option>
+                      <option value="Kore">👩 Kore (Приятный женский)</option>
+                      <option value="Fenrir">🐺 Fenrir (Хриплый, брутальный)</option>
+                      <option value="Zephyr">🍃 Zephyr (Мягкий, дружелюбный)</option>
+                    </select>
+                  </div>
+                </div>
+
+                <div className="flex justify-end pt-2">
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95"
+                  >
+                    💾 Сохранить лимиты и голос
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Section 2: Quiz Management Form */}
+            <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-4 shadow-xs">
+              <h4 className="font-bold text-slate-800 text-sm border-b border-brand-border pb-3">
+                {quizEditMode ? "📝 Редактировать квиз" : "➕ Добавить новый квиз для учеников"}
+              </h4>
+
+              <form onSubmit={handleSaveQuiz} className="space-y-4 text-xs">
+                <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+                  {/* Subject */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase">Предмет / Тематика</label>
+                    <input
+                      type="text"
+                      placeholder="Например: Математика, История"
+                      value={quizForm.subject}
+                      onChange={(e) => setQuizForm({ ...quizForm, subject: e.target.value })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-brand-border rounded-xl text-slate-800 focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    />
+                  </div>
+
+                  {/* Points */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase">Очки за правильный ответ</label>
+                    <input
+                      type="number"
+                      placeholder="Например: 10, 15, 20"
+                      value={quizForm.points}
+                      onChange={(e) => setQuizForm({ ...quizForm, points: parseInt(e.target.value) || 10 })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-brand-border rounded-xl text-slate-800 focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    />
+                  </div>
+
+                  {/* Correct Option index */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold text-slate-400 uppercase">Правильный вариант</label>
+                    <select
+                      value={quizForm.correctIndex}
+                      onChange={(e) => setQuizForm({ ...quizForm, correctIndex: parseInt(e.target.value) || 0 })}
+                      className="w-full px-3 py-2 bg-slate-50 border border-brand-border rounded-xl text-slate-800 focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                    >
+                      <option value={0}>Вариант 1</option>
+                      <option value={1}>Вариант 2</option>
+                      <option value={2}>Вариант 3</option>
+                      <option value={3}>Вариант 4</option>
+                    </select>
+                  </div>
+                </div>
+
+                {/* Question */}
+                <div className="space-y-1.5">
+                  <label className="block text-[10px] font-bold text-slate-400 uppercase">Текст вопроса квиза</label>
+                  <textarea
+                    rows={2}
+                    placeholder="Введите интересный и жизненный вопрос квиза..."
+                    value={quizForm.question}
+                    onChange={(e) => setQuizForm({ ...quizForm, question: e.target.value })}
+                    className="w-full px-3 py-2 bg-slate-50 border border-brand-border rounded-xl text-slate-800 focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
+                  />
+                </div>
+
+                {/* Option fields */}
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3.5">
+                  {quizForm.options.map((opt, idx) => (
+                    <div key={idx} className="space-y-1">
+                      <label className="block text-[10px] font-bold text-slate-400 uppercase">Вариант {idx + 1}</label>
+                      <input
+                        type="text"
+                        placeholder={`Текст варианта ответа ${idx + 1}`}
+                        value={opt}
+                        onChange={(e) => {
+                          const nextOpts = [...quizForm.options];
+                          nextOpts[idx] = e.target.value;
+                          setQuizForm({ ...quizForm, options: nextOpts });
+                        }}
+                        className={`w-full px-3 py-2 bg-slate-50 border rounded-xl text-slate-800 focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none ${
+                          quizForm.correctIndex === idx ? "border-green-400 focus:border-green-500 animate-pulse" : "border-brand-border"
+                        }`}
+                      />
+                    </div>
+                  ))}
+                </div>
+
+                {/* Submit / Cancel buttons */}
+                <div className="flex gap-2 justify-end pt-2">
+                  {quizEditMode && (
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setQuizForm({ id: "", question: "", options: ["", "", "", ""], correctIndex: 0, subject: "", points: 10 });
+                        setQuizEditMode(false);
+                      }}
+                      className="px-4 py-2 border border-brand-border hover:bg-slate-50 text-slate-600 rounded-xl transition-all"
+                    >
+                      Отмена
+                    </button>
+                  )}
+                  <button
+                    type="submit"
+                    className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs"
+                  >
+                    {quizEditMode ? "💾 Сохранить изменения" : "➕ Добавить квиз"}
+                  </button>
+                </div>
+              </form>
+            </div>
+
+            {/* Section 3: List of quizzes */}
+            <div className="space-y-4">
+              <h4 className="font-bold text-slate-800 text-sm flex items-center gap-2">
+                📂 Список доступных квизов ({quizzes.length})
+              </h4>
+
+              {quizzes.length === 0 ? (
+                <div className="bg-white border border-brand-border rounded-2xl p-8 text-center text-slate-400 text-xs">
+                  Квизов пока не создано. Добавьте первый квиз с помощью формы выше!
+                </div>
+              ) : (
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                  {quizzes.map((quiz) => (
+                    <div key={quiz.id} className="bg-white border border-brand-border rounded-2xl p-5 space-y-3.5 shadow-2xs flex flex-col justify-between">
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between">
+                          <span className="px-2.5 py-1 bg-indigo-50 text-indigo-700 rounded-full text-[10px] font-bold uppercase">
+                            📚 {quiz.subject}
+                          </span>
+                          <span className="text-[10px] font-bold text-amber-600 bg-amber-50 px-2 py-0.5 rounded-md">
+                            +{quiz.points} очков
+                          </span>
+                        </div>
+                        <h5 className="font-bold text-slate-800 text-xs leading-relaxed">
+                          {quiz.question}
+                        </h5>
+                        <ul className="space-y-1.5 text-xs text-slate-600">
+                          {quiz.options.map((opt: string, idx: number) => (
+                            <li
+                              key={idx}
+                              className={`px-3 py-1.5 rounded-lg flex items-center justify-between ${
+                                quiz.correctIndex === idx
+                                  ? "bg-green-50 text-green-700 font-medium border border-green-200"
+                                  : "bg-slate-50 border border-slate-100"
+                              }`}
+                            >
+                              <span>{idx + 1}. {opt}</span>
+                              {quiz.correctIndex === idx && <span className="text-green-600 font-bold">✓ Верный</span>}
+                            </li>
+                          ))}
+                        </ul>
+                      </div>
+
+                      <div className="flex items-center justify-end gap-2 pt-3 border-t border-slate-100 mt-2 shrink-0">
+                        <button
+                          onClick={() => handleEditQuizClick(quiz)}
+                          className="p-1.5 text-indigo-600 hover:bg-indigo-50 rounded-lg transition-all cursor-pointer"
+                          title="Редактировать"
+                        >
+                          <Edit className="w-4 h-4" />
+                        </button>
+                        <button
+                          onClick={() => handleDeleteQuiz(quiz.id)}
+                          className={`p-1.5 rounded-lg transition-all cursor-pointer ${
+                            quizToDeleteConfirmId === quiz.id
+                              ? "bg-rose-50 text-rose-600 font-bold"
+                              : "text-rose-500 hover:bg-rose-50"
+                          }`}
+                          title="Удалить"
+                        >
+                          <Trash2 className="w-4 h-4" />
+                        </button>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           </div>
         )}
