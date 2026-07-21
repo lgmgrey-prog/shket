@@ -1725,6 +1725,52 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   />
                 </div>
 
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
+                  {/* Voice responses mode */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                      Голосовые ответы бота (на ВСЕ сообщения)
+                    </label>
+                    <select
+                      value={settings.voiceResponsesMode || "disabled"}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          voiceResponsesMode: e.target.value as any,
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none font-semibold"
+                    >
+                      <option value="disabled">🔇 Отключено (Отвечает только текстом)</option>
+                      <option value="always">🔊 Включено для всех (Голос + Текст)</option>
+                      <option value="premium">💎 Только для Премиум пользователей</option>
+                    </select>
+                  </div>
+
+                  {/* Voice character selection */}
+                  <div className="space-y-1.5">
+                    <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                      Персонаж озвучки (Голос Gemini)
+                    </label>
+                    <select
+                      value={settings.voiceResponseName || "Puck"}
+                      onChange={(e) =>
+                        setSettings({
+                          ...settings,
+                          voiceResponseName: e.target.value,
+                        })
+                      }
+                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none font-semibold"
+                    >
+                      <option value="Puck">🧚 Puck (Дерзкий, весёлый мальчик)</option>
+                      <option value="Charon">🧔 Charon (Спокойный, мудрый мужской)</option>
+                      <option value="Kore">👩 Kore (Приятный женский)</option>
+                      <option value="Fenrir">🐺 Fenrir (Хриплый, брутальный)</option>
+                      <option value="Zephyr">🍃 Zephyr (Мягкий, дружелюбный)</option>
+                    </select>
+                  </div>
+                </div>
+
                 {aiTestResult && (
                   <div className={`p-4 rounded-xl border text-[11px] leading-relaxed font-semibold animate-fade-in ${
                     aiTestResult.success 
@@ -1764,12 +1810,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
         {/* TAB: QUIZZES & VOICE SETTINGS */}
         {activeTab === "quizzes" && settings && (
           <div className="space-y-6 animate-fade-in">
-            {/* Section 1: Limits & Voice */}
+            {/* Section 1: Quiz Limits */}
             <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-5 shadow-xs">
               <div className="flex items-center gap-2 border-b border-brand-border pb-3">
                 <HelpCircle className="w-5 h-5 text-indigo-600" />
                 <h3 className="font-bold text-slate-800 text-sm">
-                  ⚙️ Настройки ограничений квизов и голосовых ответов
+                  ⚙️ Настройки ограничений прохождения квизов
                 </h3>
               </div>
 
@@ -1810,50 +1856,6 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                       className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
                     />
                   </div>
-
-                  {/* Voice responses mode */}
-                  <div className="space-y-1.5">
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                      Голосовые ответы бота (TTS)
-                    </label>
-                    <select
-                      value={settings.voiceResponsesMode || "disabled"}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          voiceResponsesMode: e.target.value as any,
-                        })
-                      }
-                      className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
-                    >
-                      <option value="disabled">🔇 Отключено (Отвечает только текстом)</option>
-                      <option value="always">🔊 Включено для всех (Голос + Текст)</option>
-                      <option value="premium">💎 Только для Премиум пользователей</option>
-                    </select>
-                  </div>
-
-                  {/* Voice character selection */}
-                  <div className="space-y-1.5">
-                    <label className="block text-[11px] font-bold text-slate-500 uppercase tracking-wider">
-                      Персонаж озвучки (Голос Gemini)
-                    </label>
-                    <select
-                      value={settings.voiceResponseName || "Puck"}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          voiceResponseName: e.target.value,
-                        })
-                      }
-                      className="w-full px-3.5 py-2.5 bg-slate-50/50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none"
-                    >
-                      <option value="Puck">🧚 Puck (Дерзкий, весёлый мальчик)</option>
-                      <option value="Charon">🧔 Charon (Спокойный, мудрый мужской)</option>
-                      <option value="Kore">👩 Kore (Приятный женский)</option>
-                      <option value="Fenrir">🐺 Fenrir (Хриплый, брутальный)</option>
-                      <option value="Zephyr">🍃 Zephyr (Мягкий, дружелюбный)</option>
-                    </select>
-                  </div>
                 </div>
 
                 <div className="flex justify-end pt-2">
@@ -1861,7 +1863,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     type="submit"
                     className="px-5 py-2.5 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95"
                   >
-                    💾 Сохранить лимиты и голос
+                    💾 Сохранить лимиты квизов
                   </button>
                 </div>
               </form>
