@@ -26,6 +26,7 @@ export interface DbUser {
   messagesSinceLastAd?: number;
   quizzesToday?: number;
   lastQuizAt?: string | null;
+  campaignId?: string | null;
 }
 
 export interface DbAd {
@@ -37,6 +38,7 @@ export interface DbAd {
   clicks: number;
   isActive: boolean;
   uniqueViews?: string[];
+  targetScope?: "all" | "private" | "group";
 }
 
 export interface DbCampaign {
@@ -47,6 +49,7 @@ export interface DbCampaign {
   femaleUsers: number;
   completedOnboarding: number;
   premiumPurchased: number;
+  channelSubscribed?: number;
 }
 
 export interface DbQuiz {
@@ -71,6 +74,7 @@ export interface DbStyle {
   description: string;
   prompt: string;
   isDefault: boolean;
+  isPremium?: boolean;
 }
 
 export interface DbPayment {
@@ -762,9 +766,20 @@ export class Database {
         femaleUsers: fields.femaleUsers || 0,
         completedOnboarding: fields.completedOnboarding || 0,
         premiumPurchased: fields.premiumPurchased || 0,
+        channelSubscribed: fields.channelSubscribed || 0,
       });
     }
     this.save();
+  }
+
+  public deleteCampaign(id: string): boolean {
+    const idx = this.data.campaigns.findIndex((c) => c.id === id);
+    if (idx !== -1) {
+      this.data.campaigns.splice(idx, 1);
+      this.save();
+      return true;
+    }
+    return false;
   }
 
   // Messages Operations

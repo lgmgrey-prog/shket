@@ -20,6 +20,7 @@ export interface DbUser {
   grade?: string;
   lastAdShownAt?: string | null;
   messagesSinceLastAd?: number;
+  campaignId?: string | null;
 }
 
 export interface DbAd {
@@ -31,6 +32,7 @@ export interface DbAd {
   clicks: number;
   isActive: boolean;
   uniqueViews?: string[];
+  targetScope?: "all" | "private" | "group";
 }
 
 export interface DbCampaign {
@@ -41,6 +43,7 @@ export interface DbCampaign {
   femaleUsers: number;
   completedOnboarding: number;
   premiumPurchased: number;
+  channelSubscribed?: number;
 }
 
 export interface DbQuiz {
@@ -58,6 +61,7 @@ export interface DbStyle {
   description: string;
   prompt: string;
   isDefault: boolean;
+  isPremium?: boolean;
 }
 
 export interface DbPayment {
@@ -155,6 +159,10 @@ export interface AdminStats {
   totalMessagesChat: number;
   dau: number;
   mau: number;
+  periodNewUsers?: number;
+  periodRevenue?: number;
+  periodFrom?: string | null;
+  periodTo?: string | null;
 }
 
 export interface SystemLog {

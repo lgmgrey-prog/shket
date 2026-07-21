@@ -1,6 +1,7 @@
 import express from "express";
 import path from "path";
 import os from "os";
+import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
 import { dbInstance, DbUser } from "./server/db.js";
@@ -250,8 +251,15 @@ function shouldShowAd(user: any): boolean {
 }
 
 // Retrieve and rotate ads using impression balancing for the specified position
-function getAdForPosition(position: "start" | "mid" | "gdz" | "pin", userId: string) {
-  const activeAds = dbInstance.getAds().filter((a) => a.isActive && a.position === position);
+function getAdForPosition(position: "start" | "mid" | "gdz" | "pin", userId: string, isGroupChat: boolean = false) {
+  const activeAds = dbInstance.getAds().filter((a) => {
+    if (!a.isActive || a.position !== position) return false;
+    // Filter by targetScope if specified
+    const scope = a.targetScope || "all";
+    if (scope === "private" && isGroupChat) return false;
+    if (scope === "group" && !isGroupChat) return false;
+    return true;
+  });
   if (activeAds.length === 0) return null;
 
   // Rotation: pick the one with lowest impressions (views count), or fallback to random
@@ -576,6 +584,23 @@ async function startServer() {
       const data = await res.json();
       if (!data.ok) {
         addSystemLog("error", "api", `Ошибка ответа Telegram API для чата ${chatId}`, data);
+        
+        // Fail-safe: If Markdown parsing failed, try sending as plain text!
+        if (data.description && data.description.includes("can't parse entities") && extra.parse_mode) {
+          const fallbackExtra = { ...extra };
+          delete fallbackExtra.parse_mode;
+          addSystemLog("info", "api", `Повторная отправка без parse_mode для чата ${chatId}`, { text });
+          const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              text: text,
+              ...fallbackExtra
+            })
+          });
+          return await retryRes.json();
+        }
       } else {
         addSystemLog("info", "api", `Сообщение успешно доставлено в Telegram (Чат ID: ${chatId})`, data);
       }
@@ -604,6 +629,24 @@ async function startServer() {
       const data = await res.json();
       if (!data.ok) {
         addSystemLog("error", "api", `Ошибка ответа Telegram API (sendPhoto) для чата ${chatId}`, data);
+        
+        // Fail-safe retry
+        if (data.description && data.description.includes("can't parse entities") && extra.parse_mode) {
+          const fallbackExtra = { ...extra };
+          delete fallbackExtra.parse_mode;
+          addSystemLog("info", "api", `Повторная отправка sendPhoto без parse_mode для чата ${chatId}`, { caption });
+          const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              chat_id: chatId,
+              photo: photoUrl,
+              caption: caption,
+              ...fallbackExtra
+            })
+          });
+          return await retryRes.json();
+        }
       } else {
         addSystemLog("info", "api", `Фото успешно доставлено в Telegram (Чат ID: ${chatId})`, data);
       }
@@ -1205,6 +1248,7 @@ async function startServer() {
           firstName,
           lastName,
           referredBy,
+          campaignId,
           gender: Math.random() > 0.5 ? "M" : "F",
           onboardingCompleted: true,
           isPremium: true,
@@ -1330,7 +1374,7 @@ async function startServer() {
             // Append dynamic GDZ ads if any
             let finalReply = solution;
             if (shouldShowAd(user)) {
-              const ad = getAdForPosition("gdz", userId);
+              const ad = getAdForPosition("gdz", userId, Number(chatId) < 0);
               if (ad) {
                 finalReply += `\n\n📢 **РЕКЛАМА:**\n[${ad.text}](${ad.url})`;
               }
@@ -1396,7 +1440,7 @@ async function startServer() {
             // Append dynamic middle ad if active
             let finalReply = responseText;
             if (shouldShowAd(user)) {
-              const ad = getAdForPosition("mid", userId);
+              const ad = getAdForPosition("mid", userId, Number(chatId) < 0);
               if (ad) {
                 finalReply += `\n\n📢 **РЕКЛАМА:**\n[${ad.text}](${ad.url})`;
               }
@@ -1731,7 +1775,7 @@ async function startServer() {
       // Append dynamic middle ad if active
       let finalReply = responseText;
       if (shouldShowAd(user)) {
-        const ad = getAdForPosition("mid", userId);
+        const ad = getAdForPosition("mid", userId, Number(chatId) < 0);
         if (ad) {
           finalReply += `\n\n📢 **РЕКЛАМА:**\n[${ad.text}](${ad.url})`;
         }
@@ -1761,6 +1805,9 @@ async function startServer() {
       if (cbData === "check_subscription_status") {
         const isSubbed = await isSubscribedToRequiredChannel(token, userId);
         if (isSubbed) {
+          if (user.campaignId) {
+            dbInstance.updateCampaignStats(user.campaignId, { channelSubscribed: 1 });
+          }
           await sendTelegramMessage(token, chatId, "✅ **Подписка подтверждена!**\n\nСпасибо за подписку! Теперь ты можешь полноценно использовать все функции НейроШкЕТа. Напиши что-нибудь или нажми кнопки меню!", {
             parse_mode: "Markdown"
           });
@@ -1896,7 +1943,7 @@ async function startServer() {
         const inlineKeyboard = {
           inline_keyboard: styles.map((st) => [
             {
-              text: `${st.name} ${st.id === userStyle.id ? "✅" : ""}`,
+              text: `${st.isPremium ? "👑 " : ""}${st.name} ${st.id === userStyle.id ? "✅" : ""}`,
               callback_data: `style_${st.id}`
             }
           ])
@@ -2129,6 +2176,27 @@ async function startServer() {
         const style = styles.find(s => s.id === styleId);
 
         if (style) {
+          if (style.isPremium && !user.isPremium) {
+            await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+              method: "POST",
+              headers: { "Content-Type": "application/json" },
+              body: JSON.stringify({ 
+                callback_query_id: cb.id, 
+                text: "⚠️ Этот стиль доступен только для PREMIUM пользователей!", 
+                show_alert: true 
+              })
+            }).catch(() => {});
+            
+            const inlineKeyboard = {
+              inline_keyboard: [
+                [{ text: "👑 Купить Премиум", callback_data: "cmd_premium" }]
+              ]
+            };
+            await sendTelegramMessage(token, chatId, `👑 **Стиль "${style.name}" заблокирован!**\n\nЭтот уникальный стиль общения доступен только обладателям **PREMIUM** подписки.\n\nКупите Premium, чтобы разблокировать все стили, отключить рекламу и ОП!`, {
+              reply_markup: inlineKeyboard
+            });
+            return;
+          }
           dbInstance.updateUser(userId, { currentStyleId: styleId });
           await sendTelegramMessage(token, chatId, `🎭 **Стиль общения успешно изменен на "${style.name}"!**\n\nТеперь я буду отвечать тебе в этой роли.`);
         }
@@ -2476,7 +2544,7 @@ async function startServer() {
     // Look up dynamic advertisements triggered during chat (position: mid)
     let adToShow = null;
     if (shouldShowAd(user)) {
-      adToShow = getAdForPosition("mid", userId);
+      adToShow = getAdForPosition("mid", userId, false);
     } else {
       dbInstance.updateUser(userId, {
         messagesSinceLastAd: (user.messagesSinceLastAd || 0) + 1,
@@ -2550,7 +2618,7 @@ async function startServer() {
     // Track active GDZ ad (position: gdz)
     let adToShow = null;
     if (shouldShowAd(user)) {
-      adToShow = getAdForPosition("gdz", userId);
+      adToShow = getAdForPosition("gdz", userId, false);
     } else {
       dbInstance.updateUser(userId, {
         messagesSinceLastAd: (user.messagesSinceLastAd || 0) + 1,
@@ -2981,6 +3049,43 @@ async function startServer() {
     res.json(newCamp);
   });
 
+  // Delete Campaign Link
+  app.delete("/api/admin/campaigns/:id", (req, res) => {
+    const success = dbInstance.deleteCampaign(req.params.id);
+    res.json({ success });
+  });
+
+  // File Upload Endpoint
+  app.post("/api/admin/upload", express.json({ limit: "50mb" }), (req, res) => {
+    const { filename, base64 } = req.body;
+    if (!filename || !base64) {
+      return res.status(400).json({ error: "Filename and base64 content are required" });
+    }
+    try {
+      const buffer = Buffer.from(base64, "base64");
+      const uniqueFilename = `${Date.now()}_${filename.replace(/\s+/g, "_")}`;
+      const uploadsDir = path.join(process.cwd(), "public", "uploads");
+      
+      // Ensure folder exists
+      if (!fs.existsSync(uploadsDir)) {
+        fs.mkdirSync(uploadsDir, { recursive: true });
+      }
+      
+      const filePath = path.join(uploadsDir, uniqueFilename);
+      fs.writeFileSync(filePath, buffer);
+
+      const host = req.headers["x-forwarded-host"] || req.headers.host;
+      const protocol = req.headers["x-forwarded-proto"] || "http";
+      const relativeUrl = `/uploads/${uniqueFilename}`;
+      const absoluteUrl = `${protocol}://${host}${relativeUrl}`;
+
+      res.json({ url: absoluteUrl });
+    } catch (err: any) {
+      console.error("Upload error:", err);
+      res.status(500).json({ error: err.message });
+    }
+  });
+
   // Get Payments list
   app.get("/api/admin/payments", (req, res) => {
     res.json(dbInstance.getPayments());
@@ -3049,7 +3154,7 @@ async function startServer() {
       const token = settings.tgBotToken;
 
       if (token && /^\d+$/.test(currentUser.id)) {
-        const extra: any = {};
+        const extra: any = { parse_mode: "Markdown" };
         if (currentBroad.buttonText && currentBroad.buttonUrl) {
           const btnTextWithEmoji = currentBroad.buttonEmoji 
             ? `${currentBroad.buttonEmoji} ${currentBroad.buttonText}`
@@ -3183,6 +3288,13 @@ async function startServer() {
   // ==========================================
   // VITE & STATIC FILES MIDDLEWARE
   // ==========================================
+
+  // Serve uploads folder statically in both development and production
+  const uploadsPath = path.join(process.cwd(), "public", "uploads");
+  if (!fs.existsSync(uploadsPath)) {
+    fs.mkdirSync(uploadsPath, { recursive: true });
+  }
+  app.use("/uploads", express.static(uploadsPath));
 
   if (process.env.NODE_ENV !== "production") {
     const vite = await createViteServer({

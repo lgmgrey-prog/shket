@@ -93,7 +93,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
   const [styleEditMode, setStyleEditMode] = useState(false);
 
   // Ad form state
-  const [adForm, setAdForm] = useState({ id: "", text: "", url: "", position: "mid" as "start" | "mid" | "gdz" | "pin", isActive: true });
+  const [adForm, setAdForm] = useState({ id: "", text: "", url: "", position: "mid" as "start" | "mid" | "gdz" | "pin", isActive: true, targetScope: "all" as "all" | "private" | "group" });
   const [adEditMode, setAdEditMode] = useState(false);
 
   // Campaign form state
@@ -223,6 +223,84 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
   const showToast = (message: string, type: "success" | "error" | "info" = "success") => {
     setToast({ message, type });
     setTimeout(() => setToast(null), 3500);
+  };
+
+  const ImageUploadField = ({
+    label,
+    value,
+    onChange,
+    placeholder,
+  }: {
+    label: string;
+    value: string;
+    onChange: (url: string) => void;
+    placeholder?: string;
+  }) => {
+    const [uploading, setUploading] = useState(false);
+
+    const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+      const file = e.target.files?.[0];
+      if (!file) return;
+
+      setUploading(true);
+      try {
+        const reader = new FileReader();
+        reader.onload = async () => {
+          const base64Str = (reader.result as string).split(",")[1];
+          const response = await fetch("/api/admin/upload", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              filename: file.name,
+              base64: base64Str,
+            }),
+          });
+          const data = await response.json();
+          if (response.ok && data.url) {
+            onChange(data.url);
+            showToast("Изображение успешно загружено!", "success");
+          } else {
+            showToast(data.error || "Ошибка загрузки", "error");
+          }
+        };
+        reader.readAsDataURL(file);
+      } catch (err) {
+        console.error(err);
+        showToast("Не удалось загрузить файл", "error");
+      } finally {
+        setUploading(false);
+      }
+    };
+
+    return (
+      <div className="space-y-1.5 text-xs font-semibold">
+        <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">
+          {label}
+        </label>
+        <div className="flex gap-2 items-center">
+          <input
+            type="text"
+            value={value}
+            onChange={(e) => onChange(e.target.value)}
+            placeholder={placeholder || "https:// или выберите файл с ПК"}
+            className="flex-1 bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-bold focus:outline-none"
+          />
+          <label className="bg-slate-100 hover:bg-slate-200 text-slate-700 px-4 py-2.5 rounded-xl border border-brand-border cursor-pointer transition-all shrink-0 font-bold flex items-center gap-1 active:scale-95 text-xs">
+            {uploading ? (
+              <RefreshCw className="w-4 h-4 animate-spin" />
+            ) : (
+              <>📁 Обзор</>
+            )}
+            <input
+              type="file"
+              accept="image/*"
+              onChange={handleFileChange}
+              className="hidden"
+            />
+          </label>
+        </div>
+      </div>
+    );
   };
 
   const fetchAdminData = async () => {
@@ -388,14 +466,16 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
     e.preventDefault();
     if (!settings) return;
     try {
+      // Force aiProvider to "grok" since Grok is used for all textual replies, while Gemini handles voice/TTS
+      const payload = { ...settings, aiProvider: "grok" as const };
       const res = await fetch("/api/admin/settings", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify(settings),
+        body: JSON.stringify(payload),
       });
       const updated = await res.json();
       setSettings(updated);
-      showToast("Системные настройки и интеграция ЮKassa сохранены!", "success");
+      showToast("Системные настройки сохранены!", "success");
     } catch (e) {
       console.error(e);
       showToast("Ошибка при сохранении настроек", "error");
@@ -585,6 +665,24 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
         const data = await res.json();
         setCampaignError(data.error || "Ошибка создания кампании");
         showToast(data.error || "Ошибка создания кампании", "error");
+      }
+    } catch (e) {
+      console.error(e);
+      showToast("Ошибка запроса", "error");
+    }
+  };
+
+  const handleDeleteCampaign = async (id: string) => {
+    if (!window.confirm(`Вы уверены, что хотите удалить рекламную метку "${id}"?`)) return;
+    try {
+      const res = await fetch(`/api/admin/campaigns/${id}`, {
+        method: "DELETE",
+      });
+      if (res.ok) {
+        showToast("Рекламная метка успешно удалена!", "success");
+        fetchAdminData();
+      } else {
+        showToast("Ошибка при удалении рекламной метки", "error");
       }
     } catch (e) {
       console.error(e);
@@ -1311,7 +1409,29 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
               )}
 
               {/* Custom Telegram API URL setting */}
-              <div className="pt-4 border-t border-slate-100 space-y-2">
+              <div className="pt-4 border-t border-slate-100 space-y-4">
+                <div className="flex flex-col gap-1.5 text-xs">
+                  <label className="text-slate-600 font-bold text-[10px] uppercase tracking-wider">Юзернейм Вашего Телеграм Бота (без @):</label>
+                  <div className="flex gap-2.5">
+                    <input
+                      type="text"
+                      value={settings.tgBotUsername || ""}
+                      onChange={(e) => setSettings({ ...settings, tgBotUsername: e.target.value.replace("@", "").trim() })}
+                      placeholder="Напр: NeuroShkET_bot"
+                      className="flex-1 bg-white border border-brand-border rounded-xl p-2.5 text-slate-850 font-mono text-xs placeholder:text-slate-400 focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 shadow-inner font-semibold"
+                    />
+                    <button
+                      onClick={handleUpdateSettings}
+                      className="px-5 py-2.5 bg-slate-900 hover:bg-slate-800 border border-slate-900 text-white font-bold rounded-xl text-[10px] uppercase tracking-wide transition-all shrink-0 cursor-pointer active:scale-95 shadow-xs"
+                    >
+                      Сохранить юзернейм
+                    </button>
+                  </div>
+                  <p className="text-[10px] text-slate-400 font-normal italic leading-relaxed">
+                    Используется для генерации реферальных ссылок, ссылок на рекламные вступления и меток!
+                  </p>
+                </div>
+
                 <div className="flex flex-col gap-1.5 text-xs">
                   <label className="text-slate-600 font-bold text-[10px] uppercase tracking-wider">Пользовательский URL для Telegram API (прокси):</label>
                   <div className="flex gap-2.5">
@@ -1656,118 +1776,144 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
             </div>
 
             {/* AI Integration settings */}
-            <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-4 shadow-xs">
+            <div className="bg-white border border-brand-border rounded-2xl p-6 space-y-5 shadow-xs">
               <h4 className="font-bold text-slate-800 text-sm border-b border-brand-border pb-3 flex items-center gap-2">
-                <span>🤖 Настройка искусственного интеллекта (Gemini / Grok)</span>
+                <span>🤖 Настройка ИИ моделей (Grok для текста + Gemini для голоса)</span>
               </h4>
               <p className="text-xs text-slate-600 leading-relaxed font-medium">
-                Выберите основной искусственный интеллект для общения с пользователями и решения домашних заданий (ГДЗ). Вы можете использовать встроенный Gemini или подключить Grok от xAI.
+                Настройте параметры текстового ИИ-провайдера <strong>Grok</strong> и параметры голосовой озвучки <strong>Google Gemini</strong>. Для ответов бота используется Grok, а для генерации аудио — Gemini.
               </p>
 
-               <form onSubmit={handleUpdateSettings} className="space-y-4 text-xs font-semibold">
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Основной ИИ провайдер:</label>
-                    <select
-                      value={settings.aiProvider || "gemini"}
-                      onChange={(e) => setSettings({ ...settings, aiProvider: e.target.value as "gemini" | "grok" })}
-                      className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    >
-                      <option value="gemini">Google Gemini (Стандартный, с поддержкой голоса/кружков)</option>
-                      <option value="grok">xAI Grok (Высокая скорость, тонкая настройка)</option>
-                    </select>
+              <form onSubmit={handleUpdateSettings} className="space-y-6 text-xs font-semibold">
+                {/* Grok section */}
+                <div className="p-4 bg-slate-50/50 rounded-xl border border-brand-border space-y-4">
+                  <div className="flex items-center gap-2 pb-2 border-b border-slate-100">
+                    <span className="text-base">🖤</span>
+                    <span className="font-bold text-slate-700 text-[11px] uppercase tracking-wider">Основной ИИ для общения и текстовых ответов (xAI Grok)</span>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Модель Grok (для xAI):</label>
-                    <input
-                      type="text"
-                      value={settings.grokModel || "grok-2"}
-                      onChange={(e) => setSettings({ ...settings, grokModel: e.target.value })}
-                      placeholder="grok-2"
-                      className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">API Ключ xAI Grok:</label>
+                      <input
+                        type="password"
+                        value={settings.grokApiKey || ""}
+                        onChange={(e) => setSettings({ ...settings, grokApiKey: e.target.value })}
+                        placeholder="Вставьте xai-... (требуется для текстовых ответов)"
+                        className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+
+                    <div className="space-y-1.5">
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Модель Grok (для xAI):</label>
+                      <input
+                        type="text"
+                        value={settings.grokModel || "grok-2"}
+                        onChange={(e) => setSettings({ ...settings, grokModel: e.target.value })}
+                        placeholder="grok-2"
+                        className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-start">
+                    <button
+                      type="button"
+                      disabled={aiTestLoading}
+                      onClick={() => handleTestAi("grok")}
+                      className="px-4 py-2 bg-slate-800 hover:bg-slate-900 disabled:bg-slate-200 disabled:text-slate-400 text-white font-sans uppercase text-[10px] font-black rounded-lg cursor-pointer transition-all shadow-xs active:scale-95 text-center flex items-center justify-center gap-1.5"
+                    >
+                      <span>{aiTestLoading ? "⏳ Проверка..." : "⚡ Тест соединения Grok"}</span>
+                    </button>
                   </div>
                 </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                  <div className="space-y-1.5">
-                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">API Ключ Google Gemini:</label>
-                    <input
-                      type="password"
-                      value={settings.geminiApiKey || ""}
-                      onChange={(e) => setSettings({ ...settings, geminiApiKey: e.target.value })}
-                      placeholder="Вставьте AIzaSy... (или останется по умолчанию из .env)"
-                      className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
+                {/* Gemini section */}
+                <div className="p-4 bg-indigo-50/20 rounded-xl border border-indigo-100 space-y-4">
+                  <div className="flex items-center gap-2 pb-2 border-b border-indigo-100">
+                    <span className="text-base">🎙️</span>
+                    <span className="font-bold text-indigo-850 text-[11px] uppercase tracking-wider">Голосовые ответы и распознавание речи (Google Gemini TTS)</span>
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">API Ключ xAI Grok:</label>
-                    <input
-                      type="password"
-                      value={settings.grokApiKey || ""}
-                      onChange={(e) => setSettings({ ...settings, grokApiKey: e.target.value })}
-                      placeholder="Вставьте xai-... (требуется для провайдера Grok)"
-                      className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                    />
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {/* Voice responses mode */}
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                        Голосовые ответы бота (на ВСЕ сообщения)
+                      </label>
+                      <select
+                        value={settings.voiceResponsesMode || "disabled"}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            voiceResponsesMode: e.target.value as any,
+                          })
+                        }
+                        className="w-full px-3.5 py-2.5 bg-white border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none font-semibold"
+                      >
+                        <option value="disabled">🔇 Отключено (Отвечает только текстом)</option>
+                        <option value="always">🔊 Включено для всех (Голос + Текст)</option>
+                        <option value="premium">💎 Только для Премиум пользователей</option>
+                      </select>
+                    </div>
+
+                    {/* Voice character selection */}
+                    <div className="space-y-1.5">
+                      <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
+                        Персонаж озвучки (Голос Gemini)
+                      </label>
+                      <select
+                        value={settings.voiceResponseName || "Puck"}
+                        onChange={(e) =>
+                          setSettings({
+                            ...settings,
+                            voiceResponseName: e.target.value,
+                          })
+                        }
+                        className="w-full px-3.5 py-2.5 bg-white border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none font-semibold"
+                      >
+                        <option value="Puck">🧚 Puck (Дерзкий, весёлый мальчик)</option>
+                        <option value="Charon">🧔 Charon (Спокойный, мудрый мужской)</option>
+                        <option value="Kore">👩 Kore (Приятный женский)</option>
+                        <option value="Fenrir">🐺 Fenrir (Хриплый, брутальный)</option>
+                        <option value="Zephyr">🍃 Zephyr (Мягкий, дружелюбный)</option>
+                      </select>
+                    </div>
                   </div>
-                </div>
 
-                <div className="space-y-1.5">
-                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Альтернативный Base URL (Proxy) для Gemini:</label>
-                  <input
-                    type="text"
-                    value={settings.geminiBaseUrl || ""}
-                    onChange={(e) => setSettings({ ...settings, geminiBaseUrl: e.target.value })}
-                    placeholder="Например, https://gateway.ai.cloudflare.com/v1/... (оставьте пустым для прямого подключения)"
-                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
-                  />
-                </div>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="space-y-1.5">
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">API Ключ Google Gemini:</label>
+                      <input
+                        type="password"
+                        value={settings.geminiApiKey || ""}
+                        onChange={(e) => setSettings({ ...settings, geminiApiKey: e.target.value })}
+                        placeholder="Вставьте AIzaSy... (или останется по умолчанию из .env)"
+                        className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
 
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-4 border-t border-slate-100 pt-4">
-                  {/* Voice responses mode */}
-                  <div className="space-y-1.5">
-                    <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
-                      Голосовые ответы бота (на ВСЕ сообщения)
-                    </label>
-                    <select
-                      value={settings.voiceResponsesMode || "disabled"}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          voiceResponsesMode: e.target.value as any,
-                        })
-                      }
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none font-semibold"
+                    <div className="space-y-1.5">
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Альтернативный Base URL (Proxy) для Gemini:</label>
+                      <input
+                        type="text"
+                        value={settings.geminiBaseUrl || ""}
+                        onChange={(e) => setSettings({ ...settings, geminiBaseUrl: e.target.value })}
+                        placeholder="Например, https://gateway.ai.cloudflare.com/v1/... (оставьте пустым)"
+                        className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500"
+                      />
+                    </div>
+                  </div>
+
+                  <div className="flex justify-start">
+                    <button
+                      type="button"
+                      disabled={aiTestLoading}
+                      onClick={() => handleTestAi("gemini")}
+                      className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 disabled:bg-slate-200 disabled:text-slate-400 text-white font-sans uppercase text-[10px] font-black rounded-lg cursor-pointer transition-all shadow-xs active:scale-95 text-center flex items-center justify-center gap-1.5"
                     >
-                      <option value="disabled">🔇 Отключено (Отвечает только текстом)</option>
-                      <option value="always">🔊 Включено для всех (Голос + Текст)</option>
-                      <option value="premium">💎 Только для Премиум пользователей</option>
-                    </select>
-                  </div>
-
-                  {/* Voice character selection */}
-                  <div className="space-y-1.5">
-                    <label className="block text-[10px] font-bold text-slate-600 uppercase tracking-wider">
-                      Персонаж озвучки (Голос Gemini)
-                    </label>
-                    <select
-                      value={settings.voiceResponseName || "Puck"}
-                      onChange={(e) =>
-                        setSettings({
-                          ...settings,
-                          voiceResponseName: e.target.value,
-                        })
-                      }
-                      className="w-full px-3.5 py-2.5 bg-slate-50 border border-brand-border rounded-xl text-slate-800 text-xs focus:ring-1 focus:ring-indigo-500/20 focus:border-indigo-500 transition-all outline-none font-semibold"
-                    >
-                      <option value="Puck">🧚 Puck (Дерзкий, весёлый мальчик)</option>
-                      <option value="Charon">🧔 Charon (Спокойный, мудрый мужской)</option>
-                      <option value="Kore">👩 Kore (Приятный женский)</option>
-                      <option value="Fenrir">🐺 Fenrir (Хриплый, брутальный)</option>
-                      <option value="Zephyr">🍃 Zephyr (Мягкий, дружелюбный)</option>
-                    </select>
+                      <span>{aiTestLoading ? "⏳ Проверка..." : "⚡ Тест соединения Gemini"}</span>
+                    </button>
                   </div>
                 </div>
 
@@ -1783,21 +1929,13 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 )}
 
                 <div className="bg-slate-50 border border-brand-border rounded-xl p-3.5 text-[11px] text-slate-500 leading-relaxed font-normal">
-                  💡 <strong>Подсказка:</strong> Для решения домашнего задания по фото через <strong>Grok</strong>, убедитесь, что вы используете модель с поддержкой зрения (vision), либо оставьте <code>grok-2</code>. Для обработки голосовых сообщений и видеокружков всегда задействуется Gemini (требуется наличие ключа в .env или в поле выше) для точного распознавания речи.
+                  💡 <strong>Подсказка:</strong> Для решения домашнего задания по фото через <strong>Grok</strong>, убедитесь, что вы используете модель с поддержкой зрения (vision), либо оставьте <code>grok-2</code>. Для распознавания входящих голосовых/видеокружков, а также <strong>для генерации исходящих голосовых ответов (TTS)</strong> всегда задействуется Gemini (требуется наличие Ключа Gemini API выше или в .env), так как Grok не поддерживает генерацию голоса.
                 </div>
 
-                <div className="flex gap-4">
-                  <button
-                    type="button"
-                    disabled={aiTestLoading}
-                    onClick={() => handleTestAi(settings.aiProvider || "gemini")}
-                    className="flex-1 py-3 bg-amber-500 hover:bg-amber-600 disabled:bg-slate-200 disabled:text-slate-400 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95 text-center flex items-center justify-center gap-1.5"
-                  >
-                    <span>{aiTestLoading ? "⏳ Проверка..." : `⚡ Тест ${settings.aiProvider === "grok" ? "Grok" : "Gemini"} соединения`}</span>
-                  </button>
+                <div className="flex">
                   <button
                     type="submit"
-                    className="flex-1 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95 animate-pulse"
+                    className="w-full py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-sans uppercase text-[10px] font-black rounded-xl cursor-pointer transition-all shadow-xs active:scale-95 animate-pulse"
                   >
                     💾 Сохранить настройки ИИ моделей
                   </button>
@@ -2079,41 +2217,52 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
               <h4 className="font-bold text-slate-800 text-sm border-b border-brand-border pb-3">
                 📊 Анализ эффективности рекламных вступлений
               </h4>
-              <p className="text-[10px] text-brand-muted uppercase tracking-wider font-bold">Воронка конверсии: Клик ➔ Уникальный ➔ Прошел обучение ➔ Купил премиум ➔ Выручка</p>
+              <p className="text-[10px] text-brand-muted uppercase tracking-wider font-bold">Воронка конверсии: Клик ➔ Уникальный ➔ ОП Подписка ➔ Прошел обучение ➔ Купил премиум ➔ Выручка</p>
 
               <div className="space-y-3">
                 {campaigns.map((camp) => {
                   const onboardingRate = camp.uniqueUsers > 0 ? Math.round((camp.completedOnboarding / camp.uniqueUsers) * 100) : 0;
                   const purchaseRate = camp.uniqueUsers > 0 ? Math.round((camp.premiumPurchased / camp.uniqueUsers) * 100) : 0;
+                  const subRate = camp.uniqueUsers > 0 ? Math.round(((camp.channelSubscribed || 0) / camp.uniqueUsers) * 100) : 0;
 
                   return (
                     <div
                       key={camp.id}
                       className="bg-slate-50/50 border border-brand-border p-4.5 rounded-xl space-y-3"
                     >
-                      <div className="flex justify-between items-center text-xs">
+                      <div className="flex justify-between items-start text-xs">
                         <div>
                           <span className="font-bold text-slate-800 text-sm block">Метка: {camp.id}</span>
                           <span className="text-[10px] text-slate-400 block mt-0.5">
-                            Ссылка вступления: <code className="bg-white px-1.5 py-0.5 border border-slate-100 rounded text-indigo-600 font-bold select-all">t.me/YourBot?start=c_{camp.id}</code>
+                            Ссылка вступления: <code className="bg-white px-1.5 py-0.5 border border-slate-100 rounded text-indigo-600 font-bold select-all">t.me/{settings.tgBotUsername || "YourBot"}?start=camp_{camp.id}</code>
                           </span>
                         </div>
+                        <button
+                          onClick={() => handleDeleteCampaign(camp.id)}
+                          className="text-red-500 hover:text-red-700 bg-red-50 hover:bg-red-100 px-2.5 py-1.5 rounded-lg border border-red-100 font-bold transition-all text-[10px] uppercase cursor-pointer active:scale-95"
+                        >
+                          Удалить
+                        </button>
                       </div>
 
-                      <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-center">
-                        <div className="bg-white border border-brand-border p-2.5 rounded-xl">
+                      <div className="grid grid-cols-2 sm:grid-cols-5 gap-2 text-center">
+                        <div className="bg-white border border-brand-border p-2 rounded-xl">
                           <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Кликов / Уников:</span>
                           <span className="text-sm font-bold text-slate-800">{camp.clicksCount} / {camp.uniqueUsers}</span>
                         </div>
-                        <div className="bg-white border border-brand-border p-2.5 rounded-xl">
+                        <div className="bg-white border border-brand-border p-2 rounded-xl">
+                          <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">ОП Подписка:</span>
+                          <span className="text-sm font-bold text-emerald-600">{(camp.channelSubscribed || 0)} ({subRate}%)</span>
+                        </div>
+                        <div className="bg-white border border-brand-border p-2 rounded-xl">
                           <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Обучение (Onboard):</span>
                           <span className="text-sm font-bold text-indigo-600">{camp.completedOnboarding} ({onboardingRate}%)</span>
                         </div>
-                        <div className="bg-white border border-brand-border p-2.5 rounded-xl">
+                        <div className="bg-white border border-brand-border p-2 rounded-xl">
                           <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Продаж подписок:</span>
                           <span className="text-sm font-bold text-amber-600">{camp.premiumPurchased} ({purchaseRate}%)</span>
                         </div>
-                        <div className="bg-white border border-brand-border p-2.5 rounded-xl">
+                        <div className="bg-white border border-brand-border p-2 rounded-xl">
                           <span className="text-[9px] text-slate-400 block font-bold uppercase tracking-wider">Выручка (Оборот):</span>
                           <span className="text-sm font-bold text-brand-green">{camp.revenueSum || 0} ₽</span>
                         </div>
@@ -2164,29 +2313,41 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 </div>
 
                 <div className="space-y-3.5 flex flex-col justify-between">
-                  <div className="grid grid-cols-2 gap-3">
+                  <div className="grid grid-cols-3 gap-2">
                     <div className="space-y-1.5">
-                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider">Позиция показа:</label>
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block truncate">Позиция:</label>
                       <select
                         value={adForm.position}
                         onChange={(e) => setAdForm({ ...adForm, position: e.target.value as any })}
                         className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-bold focus:outline-none"
                       >
-                        <option value="start">При запуске (start)</option>
-                        <option value="mid">В чате (mid)</option>
-                        <option value="gdz">В блоке ГДЗ (gdz)</option>
-                        <option value="pin">Закрепленное сообщение сверху чата (pin)</option>
+                        <option value="start">start (Запуск)</option>
+                        <option value="mid">mid (Чат)</option>
+                        <option value="gdz">gdz (ГДЗ)</option>
+                        <option value="pin">pin (Закреп)</option>
                       </select>
                     </div>
                     <div className="space-y-1.5">
-                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider">Статус показа:</label>
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block truncate">Где показывать:</label>
+                      <select
+                        value={adForm.targetScope || "all"}
+                        onChange={(e) => setAdForm({ ...adForm, targetScope: e.target.value as any })}
+                        className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-bold focus:outline-none"
+                      >
+                        <option value="all">Везде</option>
+                        <option value="private">В личке</option>
+                        <option value="group">В группе</option>
+                      </select>
+                    </div>
+                    <div className="space-y-1.5">
+                      <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block truncate">Статус:</label>
                       <select
                         value={adForm.isActive ? "yes" : "no"}
                         onChange={(e) => setAdForm({ ...adForm, isActive: e.target.value === "yes" })}
                         className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-bold focus:outline-none"
                       >
-                        <option value="yes">Активно (Показывать)</option>
-                        <option value="no">Приостановлено</option>
+                        <option value="yes">Активно</option>
+                        <option value="no">Выкл</option>
                       </select>
                     </div>
                   </div>
@@ -2225,8 +2386,11 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     <div>
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-slate-800">{ad.id}</span>
-                        <span className="text-[9px] bg-slate-100 border border-brand-border text-slate-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
+                        <span className="text-[9px] bg-indigo-50 border border-indigo-100 text-indigo-700 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
                           Поз: {ad.position}
+                        </span>
+                        <span className="text-[9px] bg-slate-100 border border-brand-border text-slate-600 px-2 py-0.5 rounded-full font-bold uppercase tracking-wide">
+                          Где: {ad.targetScope === "private" ? "ЛС" : ad.targetScope === "group" ? "Группы" : "Везде"}
                         </span>
                         <span className={`text-[9px] border px-2 py-0.5 rounded-full font-bold uppercase tracking-wide ${ad.isActive ? "bg-emerald-50 text-emerald-700 border-emerald-200" : "bg-red-50 text-red-700 border-red-200"}`}>
                           {ad.isActive ? "Активен" : "Выключен"}
@@ -2246,7 +2410,7 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     <div className="flex gap-1.5 shrink-0 ml-3">
                       <button
                         onClick={() => {
-                          setAdForm(ad);
+                          setAdForm({ ...ad, targetScope: ad.targetScope || "all" });
                           setAdEditMode(true);
                           showToast("Объявление загружено в форму", "info");
                         }}
@@ -2299,16 +2463,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                     />
                   </div>
 
-                  <div className="space-y-1.5">
-                    <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider">URL медиафайла / Картинки (опционально):</label>
-                    <input
-                      type="text"
-                      value={broadcastForm.mediaUrl}
-                      onChange={(e) => setBroadcastForm({ ...broadcastForm, mediaUrl: e.target.value })}
-                      placeholder="https://images.unsplash.com/photo..."
-                      className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-bold focus:outline-none"
-                    />
-                  </div>
+                  <ImageUploadField
+                    label="Картинка рассылки (URL или файл с ПК):"
+                    value={broadcastForm.mediaUrl}
+                    onChange={(url) => setBroadcastForm({ ...broadcastForm, mediaUrl: url })}
+                    placeholder="https:// или выберите изображение"
+                  />
 
                   <div className="grid grid-cols-2 gap-3">
                     <div className="space-y-1.5">
@@ -2575,16 +2735,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Ссылка на изображение (картинку)</label>
-                      <input
-                        type="text"
-                        value={settings.startMsg?.mediaUrl || ""}
-                        onChange={(e) => updateTemplateMedia("startMsg", e.target.value)}
-                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
-                        placeholder="https://example.com/image.jpg (оставьте пустым, чтобы отправлять без картинки)"
-                      />
-                    </div>
+                    <ImageUploadField
+                      label="Изображение (картинка)"
+                      value={settings.startMsg?.mediaUrl || ""}
+                      onChange={(url) => updateTemplateMedia("startMsg", url)}
+                      placeholder="https:// или выберите изображение"
+                    />
 
                     <div>
                       <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Кнопки под сообщением</label>
@@ -2668,16 +2824,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Ссылка на изображение (картинку)</label>
-                      <input
-                        type="text"
-                        value={settings.groupMsg?.mediaUrl || ""}
-                        onChange={(e) => updateTemplateMedia("groupMsg", e.target.value)}
-                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
-                        placeholder="https://example.com/image.jpg (оставьте пустым, чтобы отправлять без картинки)"
-                      />
-                    </div>
+                    <ImageUploadField
+                      label="Изображение (картинка)"
+                      value={settings.groupMsg?.mediaUrl || ""}
+                      onChange={(url) => updateTemplateMedia("groupMsg", url)}
+                      placeholder="https:// или выберите изображение"
+                    />
 
                     <div className="mt-2.5">
                       <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Вероятность авто-ответов на обычные сообщения в группе (%):</label>
@@ -2781,16 +2933,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                       />
                     </div>
 
-                    <div>
-                      <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Ссылка на изображение (картинку)</label>
-                      <input
-                        type="text"
-                        value={settings.subMsg?.mediaUrl || ""}
-                        onChange={(e) => updateTemplateMedia("subMsg", e.target.value)}
-                        className="w-full bg-white border border-brand-border rounded-xl p-3 text-slate-900 font-semibold focus:outline-none focus:border-indigo-500 text-xs"
-                        placeholder="https://example.com/image.jpg (оставьте пустым, чтобы отправлять без картинки)"
-                      />
-                    </div>
+                    <ImageUploadField
+                      label="Изображение (картинка)"
+                      value={settings.subMsg?.mediaUrl || ""}
+                      onChange={(url) => updateTemplateMedia("subMsg", url)}
+                      placeholder="https:// или выберите изображение"
+                    />
 
                     <div>
                       <label className="block text-[11px] font-bold uppercase text-slate-500 mb-1.5">Кнопки под сообщением</label>
@@ -3166,16 +3314,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на картинку (изображение - необязательно):</label>
-                  <input
-                    type="text"
-                    value={settings.startMsg?.mediaUrl || ""}
-                    onChange={(e) => updateTemplateMedia("startMsg", e.target.value)}
-                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
-                    placeholder="https://example.com/image.jpg (оставьте пустым для обычного текстового сообщения)"
-                  />
-                </div>
+                <ImageUploadField
+                  label="Изображение приветствия (URL или файл с ПК):"
+                  value={settings.startMsg?.mediaUrl || ""}
+                  onChange={(url) => updateTemplateMedia("startMsg", url)}
+                  placeholder="https:// или выберите изображение"
+                />
 
                 {/* Inline buttons list editor for /start */}
                 <div className="space-y-3 bg-white p-4.5 rounded-xl border border-brand-border mt-3">
@@ -3266,16 +3410,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на картинку (изображение - необязательно):</label>
-                  <input
-                    type="text"
-                    value={settings.groupMsg?.mediaUrl || ""}
-                    onChange={(e) => updateTemplateMedia("groupMsg", e.target.value)}
-                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
-                    placeholder="https://example.com/image.jpg"
-                  />
-                </div>
+                <ImageUploadField
+                  label="Изображение группы (URL или файл с ПК):"
+                  value={settings.groupMsg?.mediaUrl || ""}
+                  onChange={(url) => updateTemplateMedia("groupMsg", url)}
+                  placeholder="https:// или выберите изображение"
+                />
 
                 <div className="space-y-2 mt-3 bg-white p-4.5 rounded-xl border border-brand-border">
                   <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Вероятность авто-ответов на обычные сообщения в группе (%):</label>
@@ -3406,16 +3546,12 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   />
                 </div>
 
-                <div className="space-y-2">
-                  <label className="text-slate-600 text-[10px] font-bold uppercase tracking-wider block">Ссылка на картинку (изображение - необязательно):</label>
-                  <input
-                    type="text"
-                    value={settings.subMsg?.mediaUrl || ""}
-                    onChange={(e) => updateTemplateMedia("subMsg", e.target.value)}
-                    className="w-full bg-white border border-brand-border rounded-xl p-2.5 text-slate-900 font-mono text-xs focus:outline-none focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 text-sm"
-                    placeholder="https://example.com/image.jpg"
-                  />
-                </div>
+                <ImageUploadField
+                  label="Изображение обязательной подписки (URL или файл с ПК):"
+                  value={settings.subMsg?.mediaUrl || ""}
+                  onChange={(url) => updateTemplateMedia("subMsg", url)}
+                  placeholder="https:// или выберите изображение"
+                />
 
                 {/* Inline buttons list editor for subscription */}
                 <div className="space-y-3 bg-white p-4.5 rounded-xl border border-brand-border mt-3">
