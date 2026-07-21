@@ -112,7 +112,9 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
   const [broadPreview, setBroadPreview] = useState(false);
 
   // Subscription purchases filter period
-  const [paymentPeriod, setPaymentPeriod] = useState<"day" | "week" | "month">("month");
+  const [paymentPeriod, setPaymentPeriod] = useState<"all" | "day" | "week" | "month" | "custom">("month");
+  const [customStartDate, setCustomStartDate] = useState<string>("");
+  const [customEndDate, setCustomEndDate] = useState<string>("");
 
   // Real Telegram Bot integration states
   const [tgBotTokenForm, setTgBotTokenForm] = useState("");
@@ -747,20 +749,66 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
     }
   };
 
-  // Calculate filtered payments sum
-  const getFilteredPaymentsSum = () => {
+  // Calculate filtered payments
+  const getFilteredPayments = () => {
     const now = new Date();
-    const msInDay = 24 * 3600 * 1000;
-    let limitTime = now.getTime() - 30 * msInDay; // Default month
+    let filtered = payments.filter((p) => p.status === "succeeded");
 
     if (paymentPeriod === "day") {
-      limitTime = now.getTime() - msInDay;
+      const limitTime = now.getTime() - 24 * 3600 * 1000;
+      filtered = filtered.filter((p) => new Date(p.createdAt).getTime() >= limitTime);
     } else if (paymentPeriod === "week") {
-      limitTime = now.getTime() - 7 * msInDay;
+      const limitTime = now.getTime() - 7 * 24 * 3600 * 1000;
+      filtered = filtered.filter((p) => new Date(p.createdAt).getTime() >= limitTime);
+    } else if (paymentPeriod === "month") {
+      const limitTime = now.getTime() - 30 * 24 * 3600 * 1000;
+      filtered = filtered.filter((p) => new Date(p.createdAt).getTime() >= limitTime);
+    } else if (paymentPeriod === "custom") {
+      if (customStartDate) {
+        const start = new Date(customStartDate);
+        start.setHours(0, 0, 0, 0);
+        filtered = filtered.filter((p) => new Date(p.createdAt).getTime() >= start.getTime());
+      }
+      if (customEndDate) {
+        const end = new Date(customEndDate);
+        end.setHours(23, 59, 59, 999);
+        filtered = filtered.filter((p) => new Date(p.createdAt).getTime() <= end.getTime());
+      }
     }
 
-    const filtered = payments.filter((p) => p.status === "succeeded" && new Date(p.createdAt).getTime() >= limitTime);
-    return filtered.reduce((sum, p) => sum + p.amount, 0);
+    return filtered;
+  };
+
+  const getFilteredPaymentsSum = () => {
+    return getFilteredPayments().reduce((sum, p) => sum + p.amount, 0);
+  };
+
+  const getFilteredUsers = () => {
+    let filtered = users;
+
+    if (paymentPeriod === "day") {
+      const limitTime = Date.now() - 24 * 3600 * 1000;
+      filtered = filtered.filter((u) => u.registeredAt && new Date(u.registeredAt).getTime() >= limitTime);
+    } else if (paymentPeriod === "week") {
+      const limitTime = Date.now() - 7 * 24 * 3600 * 1000;
+      filtered = filtered.filter((u) => u.registeredAt && new Date(u.registeredAt).getTime() >= limitTime);
+    } else if (paymentPeriod === "month") {
+      const limitTime = Date.now() - 30 * 24 * 3600 * 1000;
+      filtered = filtered.filter((u) => u.registeredAt && new Date(u.registeredAt).getTime() >= limitTime);
+    } else if (paymentPeriod === "custom") {
+      if (customStartDate) {
+        const start = new Date(customStartDate);
+        start.setHours(0, 0, 0, 0);
+        filtered = filtered.filter((u) => u.registeredAt && new Date(u.registeredAt).getTime() >= start.getTime());
+      }
+      if (customEndDate) {
+        const end = new Date(customEndDate);
+        end.setHours(23, 59, 59, 999);
+        filtered = filtered.filter((u) => u.registeredAt && new Date(u.registeredAt).getTime() <= end.getTime());
+      }
+    }
+
+    return filtered;
   };
 
   // Auth Form handler
@@ -976,20 +1024,86 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
         {/* TAB 1: ANALYTICS */}
         {activeTab === "stats" && stats && (
           <div className="space-y-6 animate-fade-in">
+            {/* Unified Period / Date Filter component */}
+            <div className="bg-white border border-brand-border rounded-2xl p-5 shadow-xs flex flex-col md:flex-row md:items-center justify-between gap-4">
+              <div className="space-y-1">
+                <span className="text-[10px] text-brand-muted uppercase font-bold tracking-wider block">Диапазон дат статистики</span>
+                <h4 className="font-bold text-slate-800 text-sm">Фильтрация показателей дашборда</h4>
+              </div>
+
+              <div className="flex flex-wrap items-center gap-3 text-xs">
+                {/* Predefined Quick presets */}
+                <div className="flex gap-1 bg-slate-100 p-1 rounded-xl border border-brand-border shrink-0">
+                  {[
+                    { id: "all", label: "Всё время" },
+                    { id: "day", label: "День" },
+                    { id: "week", label: "Неделя" },
+                    { id: "month", label: "Месяц" },
+                    { id: "custom", label: "Свой период" }
+                  ].map((p) => (
+                    <button
+                      key={p.id}
+                      type="button"
+                      onClick={() => setPaymentPeriod(p.id as any)}
+                      className={`px-3 py-1.5 rounded-lg font-bold transition-all cursor-pointer ${
+                        paymentPeriod === p.id ? "bg-white text-slate-900 shadow-xs" : "text-slate-500 hover:text-slate-800"
+                      }`}
+                    >
+                      {p.label}
+                    </button>
+                  ))}
+                </div>
+
+                {/* Custom date range picker */}
+                {paymentPeriod === "custom" && (
+                  <div className="flex items-center gap-2 animate-fade-in bg-slate-50 border border-brand-border p-1.5 rounded-xl">
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase pl-1">С:</span>
+                      <input
+                        type="date"
+                        value={customStartDate}
+                        onChange={(e) => setCustomStartDate(e.target.value)}
+                        className="bg-white border border-brand-border rounded-lg px-2 py-1 text-slate-800 font-semibold focus:outline-none focus:border-indigo-500 text-xs cursor-pointer"
+                      />
+                    </div>
+                    <div className="flex items-center gap-1.5">
+                      <span className="text-[10px] text-slate-400 font-bold uppercase">По:</span>
+                      <input
+                        type="date"
+                        value={customEndDate}
+                        onChange={(e) => setCustomEndDate(e.target.value)}
+                        className="bg-white border border-brand-border rounded-lg px-2 py-1 text-slate-800 font-semibold focus:outline-none focus:border-indigo-500 text-xs cursor-pointer"
+                      />
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
+
             {/* Quick Metrics Grid */}
             <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
               <div className="bg-white border border-brand-border p-5 rounded-2xl flex flex-col justify-between shadow-xs hover:shadow-sm transition-all">
-                <span className="text-brand-muted text-[11px] font-bold uppercase tracking-wider block">Всего Учеников</span>
-                <span className="text-3xl font-bold text-slate-950 mt-1.5 tracking-tight">{stats.totalUsers}</span>
-                <span className="text-[10px] text-brand-green block mt-1.5 font-bold">Органика + Рефералка</span>
+                <span className="text-brand-muted text-[11px] font-bold uppercase tracking-wider block">
+                  {paymentPeriod === "all" ? "Всего Учеников" : "Новых Учеников"}
+                </span>
+                <span className="text-3xl font-bold text-slate-950 mt-1.5 tracking-tight">
+                  {paymentPeriod === "all" ? stats.totalUsers : getFilteredUsers().length}
+                </span>
+                <span className="text-[10px] text-brand-green block mt-1.5 font-bold">
+                  {paymentPeriod === "all" ? "Органика + Рефералка" : `Всего в базе: ${stats.totalUsers}`}
+                </span>
               </div>
               <div className="bg-white border border-brand-border p-5 rounded-2xl flex flex-col justify-between shadow-xs hover:shadow-sm transition-all">
-                <span className="text-brand-muted text-[11px] font-bold uppercase tracking-wider block">Конверсия в подписку</span>
+                <span className="text-brand-muted text-[11px] font-bold uppercase tracking-wider block">Конверсия за период</span>
                 <span className="text-3xl font-bold text-amber-600 mt-1.5 tracking-tight">
-                  {stats.totalUsers > 0 ? Math.round((stats.premiumUsers / stats.totalUsers) * 100) : 0}%
+                  {paymentPeriod === "all"
+                    ? (stats.totalUsers > 0 ? Math.round((stats.premiumUsers / stats.totalUsers) * 100) : 0)
+                    : (getFilteredUsers().length > 0 ? Math.round((getFilteredUsers().filter(u => u.isPremium).length / getFilteredUsers().length) * 100) : 0)}%
                 </span>
                 <span className="text-[10px] text-slate-600 block mt-1.5 font-semibold">
-                  {stats.premiumUsers} активных подписок
+                  {paymentPeriod === "all"
+                    ? `${stats.premiumUsers} активных подписок`
+                    : `${getFilteredUsers().filter(u => u.isPremium).length} новых премиум из ${getFilteredUsers().length}`}
                 </span>
               </div>
               <div className="bg-white border border-brand-border p-5 rounded-2xl flex flex-col justify-between shadow-xs hover:shadow-sm transition-all">
@@ -1002,9 +1116,15 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                 </span>
               </div>
               <div className="bg-white border border-brand-border p-5 rounded-2xl flex flex-col justify-between shadow-xs hover:shadow-sm transition-all">
-                <span className="text-brand-muted text-[11px] font-bold uppercase tracking-wider block">Общий Оборот</span>
-                <span className="text-3xl font-bold text-brand-green mt-1.5 tracking-tight">{stats.totalRevenue} ₽</span>
-                <span className="text-[10px] text-brand-green block mt-1.5 font-bold">ЮKassa подтверждена</span>
+                <span className="text-brand-muted text-[11px] font-bold uppercase tracking-wider block">
+                  {paymentPeriod === "all" ? "Общий Оборот" : "Оборот за период"}
+                </span>
+                <span className="text-3xl font-bold text-brand-green mt-1.5 tracking-tight">
+                  {paymentPeriod === "all" ? stats.totalRevenue : getFilteredPaymentsSum()} ₽
+                </span>
+                <span className="text-[10px] text-brand-green block mt-1.5 font-bold">
+                  {paymentPeriod === "all" ? "ЮKassa подтверждена" : `Всего оборот: ${stats.totalRevenue} ₽`}
+                </span>
               </div>
             </div>
 
@@ -1015,19 +1135,6 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   <h4 className="font-bold text-slate-800 text-sm tracking-tight">Продажи премиум-тарифов</h4>
                   <p className="text-[11px] text-brand-muted mt-0.5">Оценка выручки с подписок за выбранный интервал</p>
                 </div>
-                <div className="flex gap-1 bg-slate-100 p-1 rounded-xl text-[11px] border border-brand-border">
-                  {["day", "week", "month"].map((p) => (
-                    <button
-                      key={p}
-                      onClick={() => setPaymentPeriod(p as any)}
-                      className={`px-3 py-1 rounded-lg font-semibold uppercase transition-all cursor-pointer ${
-                        paymentPeriod === p ? "bg-white text-slate-850 shadow-xs" : "text-slate-500 hover:text-slate-800"
-                      }`}
-                    >
-                      {p === "day" ? "День" : p === "week" ? "Неделя" : "Месяц"}
-                    </button>
-                  ))}
-                </div>
               </div>
 
               <div className="p-4 bg-brand-bg rounded-xl border border-brand-border flex justify-between items-center flex-wrap gap-4">
@@ -1036,6 +1143,9 @@ export default function AdminPanel({ activityTick = 0 }: AdminPanelProps) {
                   <div>
                     <span className="text-[10px] text-brand-muted font-bold block uppercase tracking-wider">Получено платежей за период:</span>
                     <span className="text-3xl font-bold text-slate-800">{getFilteredPaymentsSum()} ₽</span>
+                    <span className="text-[11px] text-slate-500 block mt-1 font-semibold">
+                      Успешных транзакций за диапазон: <span className="font-bold text-indigo-600">{getFilteredPayments().length}</span>
+                    </span>
                   </div>
                 </div>
                 <div className="text-left text-[11px] text-slate-600 space-y-1 font-medium bg-white p-3 rounded-xl border border-brand-border">

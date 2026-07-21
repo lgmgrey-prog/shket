@@ -1600,13 +1600,24 @@ async function startServer() {
         }
         const randomQuiz = quizzes[Math.floor(Math.random() * quizzes.length)];
 
+        const quizRows: any[][] = [];
+        for (let i = 0; i < randomQuiz.options.length; i += 2) {
+          const row: any[] = [];
+          row.push({
+            text: randomQuiz.options[i],
+            callback_data: `quiz_${randomQuiz.id}_${i}`
+          });
+          if (i + 1 < randomQuiz.options.length) {
+            row.push({
+              text: randomQuiz.options[i + 1],
+              callback_data: `quiz_${randomQuiz.id}_${i + 1}`
+            });
+          }
+          quizRows.push(row);
+        }
+
         const inlineKeyboard = {
-          inline_keyboard: randomQuiz.options.map((opt, idx) => [
-            {
-              text: opt,
-              callback_data: `quiz_${randomQuiz.id}_${idx}`
-            }
-          ])
+          inline_keyboard: quizRows
         };
 
         await sendTelegramMessage(token, chatId, `📚 КВИЗ по предмету [${randomQuiz.subject}]:\n\n${randomQuiz.question}\n\nЗа правильный ответ ты получишь ${randomQuiz.points} очков!`, {
@@ -1894,13 +1905,24 @@ async function startServer() {
         } else {
           const randomQuiz = quizzes[Math.floor(Math.random() * quizzes.length)];
 
+          const quizRows: any[][] = [];
+          for (let i = 0; i < randomQuiz.options.length; i += 2) {
+            const row: any[] = [];
+            row.push({
+              text: randomQuiz.options[i],
+              callback_data: `quiz_${randomQuiz.id}_${i}`
+            });
+            if (i + 1 < randomQuiz.options.length) {
+              row.push({
+                text: randomQuiz.options[i + 1],
+                callback_data: `quiz_${randomQuiz.id}_${i + 1}`
+              });
+            }
+            quizRows.push(row);
+          }
+
           const inlineKeyboard = {
-            inline_keyboard: randomQuiz.options.map((opt, idx) => [
-              {
-                text: opt,
-                callback_data: `quiz_${randomQuiz.id}_${idx}`
-              }
-            ])
+            inline_keyboard: quizRows
           };
 
           await sendTelegramMessage(token, chatId, `📚 **КВИЗ по предмету [${randomQuiz.subject}]:**\n\n${randomQuiz.question}\n\n*За правильный ответ ты получишь ${randomQuiz.points} очков!*`, {
