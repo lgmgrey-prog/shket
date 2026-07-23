@@ -1,4 +1,7 @@
 import { GoogleGenAI } from "@google/genai";
+import { spawn } from "child_process";
+import fs from "fs";
+import path from "path";
 import { dbInstance } from "./db.js";
 
 let aiInstance: GoogleGenAI | null = null;
@@ -278,7 +281,9 @@ export async function chatWithBot(userId: string, userMessage: string): Promise<
     systemPrompt += `\nВНИМАНИЕ: Пользователь активировал персональный стиль. Дополнительное требование к твоему поведению: "${user.customPrompt}". Обязательно соблюдай его!`;
   }
 
-  if (settings.aiProvider === "grok") {
+  const hasGrokKey = !!(settings.grokApiKey || process.env.GROK_API_KEY);
+
+  if (settings.aiProvider === "grok" && hasGrokKey) {
     try {
       const grokMessages = history.map((msg) => ({
         role: msg.role === "user" ? "user" : "assistant",
@@ -291,12 +296,8 @@ export async function chatWithBot(userId: string, userMessage: string): Promise<
       dbInstance.saveMessage(userId, "model", aiText);
       return aiText;
     } catch (err: any) {
-      console.warn("Grok API call failed:", err);
-      const errMsg = err?.message || String(err);
-      const mockReply = `⚠️ Ошибка Grok API: "${errMsg}". Пожалуйста, проверьте API ключ xAI Grok в панели администратора (раздел "Настройки") или проверьте статус баланса вашего аккаунта xAI.`;
-      dbInstance.saveMessage(userId, "user", userMessage);
-      dbInstance.saveMessage(userId, "model", mockReply);
-      return mockReply;
+      console.warn("Grok API call failed, falling back to Gemini:", err);
+      // Fall through to Gemini below
     }
   }
 
@@ -343,7 +344,8 @@ export async function solveHomework(base64ImageWithHeader: string, customPrompt?
     ? `${basePrompt}\n\nПользователь прикрепил уточнение/вопрос к задаче: "${customPrompt.trim()}". Обязательно реши именно то, о чем просит пользователь в своем уточнении!`
     : basePrompt;
 
-  if (settings.aiProvider === "grok") {
+  const hasGrokKeyGDZ = !!(settings.grokApiKey || process.env.GROK_API_KEY);
+  if (settings.aiProvider === "grok" && hasGrokKeyGDZ) {
     try {
       const grokMessages = [
         {
@@ -362,8 +364,8 @@ export async function solveHomework(base64ImageWithHeader: string, customPrompt?
       const modelToUse = settings.grokModel?.includes("vision") ? settings.grokModel : "grok-2";
       return await callGrok("", grokMessages, modelToUse);
     } catch (err: any) {
-      console.warn("Grok API GDZ failed, using mock fallback:", err);
-      return getMockGdzResponse();
+      console.warn("Grok API GDZ failed, falling back to Gemini:", err);
+      // Fall through to Gemini below
     }
   }
 
@@ -417,14 +419,15 @@ export async function generateTeacherJoke(grade?: string): Promise<string> {
   const prompt = `Расскажи один смешной, короткий, дерзкий и саркастичный анекдот или шутку/историю, адаптированную ${gradeText}. 
 Тематика НЕ должна ограничиваться только школой и учителями — пиши на любые жизненные темы: про подростков, родителей, тусовки, современные мемы, технологии, компьютерные игры, отношения или угарный бытовой абсурд. Без жесткой цензуры (но в рамках разумного), чтобы было максимально жизненно и смешно для молодежи. Форматируй текст красиво для Telegram.`;
 
-  if (settings.aiProvider === "grok") {
+  const hasGrokKey = !!(settings.grokApiKey || process.env.GROK_API_KEY);
+  if (settings.aiProvider === "grok" && hasGrokKey) {
     try {
       return await callGrok(
         "Ты — школьный юморист ШкЕТ. Пиши смешно, коротко и со сленгом.",
         [{ role: "user", content: prompt }]
       );
     } catch (err) {
-      return getMockTeacherJoke();
+      console.warn("Grok API joke failed, falling back to Gemini:", err);
     }
   }
 
@@ -446,14 +449,15 @@ export async function generateTeacherJoke(grade?: string): Promise<string> {
  */
 export async function insultByName(name: string): Promise<string> {
   const settings = dbInstance.getSettings();
-  if (settings.aiProvider === "grok") {
+  const hasGrokKey = !!(settings.grokApiKey || process.env.GROK_API_KEY);
+  if (settings.aiProvider === "grok" && hasGrokKey) {
     try {
       return await callGrok(
         "Ты — дерзкий школьный авторитет ШкЕТ. Роастишь учеников по-дружески, остроумно и молодежно.",
         [{ role: "user", content: `Выдай один смешной, дерзкий и саркастичный школьный подкол/роаст для ученика по имени "${name}". Придумай ему смешную кличку на основе имени и весело высмей его школьную лень, увлечение играми или списывание. Это должно быть без жесткого мата, но смешно и жизненно, в стиле дружеского подкола.` }]
       );
     } catch (err) {
-      return getMockInsult(name);
+      console.warn("Grok API roast failed, falling back to Gemini:", err);
     }
   }
 
@@ -632,7 +636,7 @@ export async function testAiConnection(
 /**
  * Generate audio speech from text using Google Gemini TTS model
  */
-export async function generateSpeech(text: string, voiceName?: string): Promise<string | null> {
+export async function generateSpeech(text: string, voiceName?: string): Promise<{ data: string; mimeType: string } | null> {
   try {
     const ai = getGeminiClient();
     const response = await ai.models.generateContent({
@@ -653,13 +657,146 @@ export async function generateSpeech(text: string, voiceName?: string): Promise<
     const parts = response.candidates?.[0]?.content?.parts;
     const audioPart = parts?.find((p: any) => p.inlineData && p.inlineData.mimeType?.startsWith("audio/"));
     if (audioPart && audioPart.inlineData) {
-      return audioPart.inlineData.data;
+      return {
+        data: audioPart.inlineData.data,
+        mimeType: audioPart.inlineData.mimeType || "audio/pcm"
+      };
     }
     return null;
   } catch (err) {
     console.warn("Failed to generate speech via Gemini:", err);
     return null;
   }
+}
+
+/**
+ * Convert input audio buffer to Telegram-compatible OGG Opus using ffmpeg
+ */
+export async function convertAudioToOggOpus(inputBuffer: Buffer, mimeType: string = "audio/pcm"): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let args: string[] = [];
+
+    if (mimeType.includes("pcm") || mimeType.includes("raw") || mimeType.includes("l16")) {
+      let sampleRate = "24000";
+      const rateMatch = mimeType.match(/rate=(\d+)/);
+      if (rateMatch) {
+        sampleRate = rateMatch[1];
+      }
+      args = ["-f", "s16le", "-ar", sampleRate, "-ac", "1", "-i", "pipe:0"];
+    } else {
+      args = ["-i", "pipe:0"];
+    }
+
+    args.push("-c:a", "libopus", "-b:a", "32k", "-vbr", "on", "-f", "ogg", "pipe:1");
+
+    const ffmpeg = spawn("ffmpeg", args);
+    const stdoutChunks: Buffer[] = [];
+    let stderrText = "";
+
+    ffmpeg.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    ffmpeg.stderr.on("data", (chunk: Buffer) => {
+      stderrText += chunk.toString();
+    });
+
+    ffmpeg.on("close", (code) => {
+      if (code === 0 && stdoutChunks.length > 0) {
+        resolve(Buffer.concat(stdoutChunks));
+      } else {
+        reject(new Error(`ffmpeg exited with code ${code}: ${stderrText.slice(-300)}`));
+      }
+    });
+
+    ffmpeg.on("error", (err) => {
+      reject(err);
+    });
+
+    ffmpeg.stdin.write(inputBuffer);
+    ffmpeg.stdin.end();
+  });
+}
+
+/**
+ * Convert input audio buffer (and optional base video file) to Telegram Video Note MP4 (1:1 square)
+ */
+export async function convertAudioToVideoNote(
+  inputBuffer: Buffer,
+  mimeType: string = "audio/pcm",
+  videoSourceUrl?: string
+): Promise<Buffer> {
+  return new Promise((resolve, reject) => {
+    let videoInputPath = "";
+
+    if (videoSourceUrl) {
+      let candidatePath = "";
+      if (videoSourceUrl.startsWith("/uploads/") || videoSourceUrl.startsWith("uploads/")) {
+        candidatePath = path.join(process.cwd(), "public", videoSourceUrl.startsWith("/") ? videoSourceUrl.slice(1) : videoSourceUrl);
+      } else if (videoSourceUrl.startsWith("/")) {
+        candidatePath = path.join(process.cwd(), "public", videoSourceUrl.slice(1));
+      } else if (videoSourceUrl.includes("/uploads/")) {
+        const parts = videoSourceUrl.split("/uploads/");
+        candidatePath = path.join(process.cwd(), "public", "uploads", parts[1]);
+      }
+
+      if (candidatePath && fs.existsSync(candidatePath)) {
+        videoInputPath = candidatePath;
+      }
+    }
+
+    let args: string[] = ["-y"];
+
+    if (videoInputPath) {
+      args.push("-stream_loop", "-1", "-i", videoInputPath);
+    } else {
+      args.push("-f", "lavfi", "-i", "testsrc=size=384x384:rate=30");
+    }
+
+    if (mimeType.includes("pcm") || mimeType.includes("raw") || mimeType.includes("l16")) {
+      let sampleRate = "24000";
+      const rateMatch = mimeType.match(/rate=(\d+)/);
+      if (rateMatch) {
+        sampleRate = rateMatch[1];
+      }
+      args.push("-f", "s16le", "-ar", sampleRate, "-ac", "1", "-i", "pipe:0");
+    } else {
+      args.push("-i", "pipe:0");
+    }
+
+    args.push(
+      "-vf", "crop=min(iw\\\,ih):min(iw\\\,ih),scale=384:384",
+      "-c:v", "libx264", "-pix_fmt", "yuv420p", "-r", "30", "-preset", "ultrafast", "-crf", "26",
+      "-map", "0:v:0",
+      "-map", "1:a:0",
+      "-c:a", "aac", "-b:a", "96k",
+      "-shortest",
+      "-f", "mp4",
+      "-movflags", "frag_keyframe+empty_moov",
+      "pipe:1"
+    );
+
+    const ffmpeg = spawn("ffmpeg", args);
+    const stdoutChunks: Buffer[] = [];
+    let stderrText = "";
+
+    ffmpeg.stdout.on("data", (chunk: Buffer) => stdoutChunks.push(chunk));
+    ffmpeg.stderr.on("data", (chunk: Buffer) => {
+      stderrText += chunk.toString();
+    });
+
+    ffmpeg.on("close", (code) => {
+      if (code === 0 && stdoutChunks.length > 0) {
+        resolve(Buffer.concat(stdoutChunks));
+      } else {
+        reject(new Error(`ffmpeg video_note exit code ${code}: ${stderrText.slice(-300)}`));
+      }
+    });
+
+    ffmpeg.on("error", (err) => {
+      reject(err);
+    });
+
+    ffmpeg.stdin.write(inputBuffer);
+    ffmpeg.stdin.end();
+  });
 }
 
 

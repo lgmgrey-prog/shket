@@ -4,8 +4,8 @@ import os from "os";
 import fs from "fs";
 import { createServer as createViteServer } from "vite";
 import dotenv from "dotenv";
-import { dbInstance, DbUser } from "./server/db.js";
-import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWithVoiceOrVideo, testAiConnection, generateSpeech } from "./server/gemini.js";
+import { dbInstance, DbUser, TemplateButton, BotMessageTemplate, GroupCrowdfund, DbSettings } from "./server/db.js";
+import { chatWithBot, solveHomework, generateTeacherJoke, insultByName, chatWithVoiceOrVideo, testAiConnection, generateSpeech, convertAudioToOggOpus, convertAudioToVideoNote } from "./server/gemini.js";
 
 // Load env variables
 dotenv.config();
@@ -60,6 +60,66 @@ function addSystemLog(level: "info" | "warn" | "error", category: "bot" | "webho
   if (systemLogs.length > 500) {
     systemLogs.pop();
   }
+}
+
+const DEFAULT_START_BUTTONS: TemplateButton[] = [
+  { text: "🎒 Решить ГДЗ", type: "cmd_gdz", callbackData: "cmd_gdz" },
+  { text: "🎭 Выбрать стиль ИИ", type: "cmd_style", callbackData: "cmd_style" },
+  { text: "➕ Добавить в группу", type: "startgroup", url: "" }
+];
+
+export function buildTemplateKeyboard(
+  template?: BotMessageTemplate,
+  botUsername: string = "NeuroShketBot",
+  defaultButtons?: TemplateButton[]
+) {
+  const rawButtons = (template?.buttons && template.buttons.length > 0)
+    ? template.buttons
+    : (defaultButtons || []);
+
+  if (rawButtons.length === 0) {
+    return undefined;
+  }
+
+  const buttonsInRow = template?.buttonsInRow && template.buttonsInRow > 0 ? template.buttonsInRow : 2;
+
+  const rows: any[][] = [];
+  let currentRow: any[] = [];
+
+  for (const btn of rawButtons) {
+    const item: any = { text: btn.text };
+    const bType = btn.type || (btn.url ? "url" : (btn.callbackData || "cmd_gdz"));
+
+    if (bType === "startgroup") {
+      item.url = (btn.url && btn.url.trim()) ? btn.url.trim() : `https://t.me/${botUsername}?startgroup=true`;
+    } else if (bType === "url") {
+      item.url = btn.url || "https://t.me/";
+    } else {
+      if (bType === "cmd_ref") {
+        item.callback_data = "cmd_referral";
+      } else {
+        item.callback_data = btn.callbackData || bType;
+      }
+    }
+
+    if (btn.row !== undefined && btn.row > 0) {
+      const rIdx = btn.row - 1;
+      while (rows.length <= rIdx) rows.push([]);
+      rows[rIdx].push(item);
+    } else {
+      currentRow.push(item);
+      if (currentRow.length >= buttonsInRow) {
+        rows.push(currentRow);
+        currentRow = [];
+      }
+    }
+  }
+
+  if (currentRow.length > 0) {
+    rows.push(currentRow);
+  }
+
+  return { inline_keyboard: rows };
 }
 
 // Check for expired premiums, demoting users if their premium expiration has passed.
@@ -204,33 +264,47 @@ function getGlobalLeaderboardText(currentUserId?: string): string {
 // Check if user is subscribed to the mandatory channel configured in settings
 async function isSubscribedToRequiredChannel(token: string, userId: string): Promise<boolean> {
   const settings = dbInstance.getSettings();
-  if (!settings.requiredChannelUrl) return true;
 
-  // Derive channel username from URL, e.g. https://t.me/my_channel -> @my_channel
-  let channelId = settings.requiredChannelUrl.trim();
-  if (channelId.includes("t.me/")) {
-    const parts = channelId.split("t.me/")[1].split("/");
-    channelId = "@" + parts[0];
+  const channelsToCheck: { name: string; url: string }[] = [];
+  if (settings.requiredChannels && settings.requiredChannels.length > 0) {
+    channelsToCheck.push(...settings.requiredChannels.filter((c) => c.url && c.url.trim()));
+  } else if (settings.requiredChannelUrl && settings.requiredChannelUrl.trim()) {
+    channelsToCheck.push({
+      name: settings.requiredChannelName || "Канал",
+      url: settings.requiredChannelUrl.trim(),
+    });
   }
 
-  try {
-    const res = await fetch(`https://api.telegram.org/bot${token}/getChatMember?chat_id=${channelId}&user_id=${userId}`);
-    const data = await res.json();
-    if (data.ok) {
-      const status = data.result?.status;
-      return ["creator", "administrator", "member", "restricted"].includes(status);
-    } else {
-      console.warn(`getChatMember returned error: ${data.description}`);
-      // Fallback: If channel format is invalid or bot is not an administrator, do not block the user!
-      if (data.description && (data.description.includes("chat not found") || data.description.includes("not an administrator") || data.description.includes("bot is not a member"))) {
-        return true;
-      }
-      return false;
+  if (channelsToCheck.length === 0) return true;
+
+  for (const ch of channelsToCheck) {
+    let channelId = ch.url.trim();
+    if (channelId.includes("t.me/")) {
+      const parts = channelId.split("t.me/")[1].split("/");
+      channelId = "@" + parts[0];
     }
-  } catch (err) {
-    console.error("isSubscribedToRequiredChannel error:", err);
-    return true; // fail-safe: pass on network/API failure
+    if (!channelId.startsWith("@") && !channelId.startsWith("-")) {
+      channelId = "@" + channelId;
+    }
+
+    try {
+      const res = await fetch(`https://api.telegram.org/bot${token}/getChatMember?chat_id=${encodeURIComponent(channelId)}&user_id=${userId}`);
+      const data = await res.json();
+      if (data.ok) {
+        const status = data.result?.status;
+        const isMember = ["creator", "administrator", "member", "restricted"].includes(status);
+        if (!isMember) return false;
+      } else {
+        // If chat not found or bot is not admin or user not found, do not block the user or output console warnings
+        addSystemLog("info", "bot", `Channel check for ${channelId}: ${data.description || "Not available"}`);
+        continue;
+      }
+    } catch (err) {
+      addSystemLog("info", "bot", `Network error checking channel ${channelId}`);
+    }
   }
+
+  return true;
 }
 
 // Check if we should display an advertisement to the user
@@ -497,14 +571,13 @@ async function startServer() {
   app.use(express.urlencoded({ limit: "15mb", extended: true }));
 
   // Helper helper to send Telegram voice message
-  async function sendTelegramVoice(token: string, chatId: string | number, audioBase64: string, extra: any = {}) {
+  async function sendTelegramVoice(token: string, chatId: string | number, audioBuffer: Buffer, extra: any = {}) {
     try {
-      addSystemLog("info", "api", `Отправка sendVoice в Telegram (Чат ID: ${chatId})`);
+      addSystemLog("info", "api", `Отправка sendVoice в Telegram (Чат ID: ${chatId}, размер файла: ${audioBuffer.length} байт)`);
       const formData = new FormData();
       formData.append("chat_id", String(chatId));
 
-      const buffer = Buffer.from(audioBase64, "base64");
-      const blob = new Blob([buffer], { type: "audio/ogg" });
+      const blob = new Blob([audioBuffer], { type: "audio/ogg" });
       formData.append("voice", blob, "voice.ogg");
 
       for (const [key, val] of Object.entries(extra)) {
@@ -533,6 +606,41 @@ async function startServer() {
     }
   }
 
+  // Helper helper to send Telegram video note (видеокружок 1:1)
+  async function sendTelegramVideoNote(token: string, chatId: string | number, videoBuffer: Buffer, extra: any = {}) {
+    try {
+      addSystemLog("info", "api", `Отправка sendVideoNote в Telegram (Чат ID: ${chatId}, размер: ${videoBuffer.length} байт)`);
+      const formData = new FormData();
+      formData.append("chat_id", String(chatId));
+
+      const blob = new Blob([videoBuffer], { type: "video/mp4" });
+      formData.append("video_note", blob, "video_note.mp4");
+      formData.append("length", "384");
+
+      for (const [key, val] of Object.entries(extra)) {
+        if (val !== undefined && val !== null) {
+          formData.append(key, typeof val === "object" ? JSON.stringify(val) : String(val));
+        }
+      }
+
+      const res = await fetch(`https://api.telegram.org/bot${token}/sendVideoNote`, {
+        method: "POST",
+        body: formData
+      });
+      const data = await res.json();
+      if (!data.ok) {
+        addSystemLog("error", "api", `Ошибка ответа Telegram API (sendVideoNote) для чата ${chatId}`, data);
+      } else {
+        addSystemLog("info", "api", `Видеокружок успешно отправлен в Telegram (Чат ID: ${chatId})`, data);
+      }
+      return data;
+    } catch (err: any) {
+      console.error("sendTelegramVideoNote error:", err);
+      addSystemLog("error", "api", `Исключение при отправке sendVideoNote (Чат ID: ${chatId}): ${err.message}`, { stack: err.stack });
+      return null;
+    }
+  }
+
   async function sendVoiceResponseIfNeeded(chatId: string | number, text: string, user: DbUser) {
     try {
       const settings = dbInstance.getSettings();
@@ -543,6 +651,8 @@ async function startServer() {
         const token = settings.tgBotToken;
         if (!token) return;
 
+        const responseType = settings.voiceResponseType || "video_note";
+
         // Clean the text from markdown or URLs/emojis so TTS reads it beautifully
         const cleanText = text
           .replace(/[*_`\[\]()#]/g, "") // remove markdown syntax
@@ -550,21 +660,50 @@ async function startServer() {
           .trim();
 
         if (cleanText) {
-          // Send recording voice status
+          // Send chat action
+          const actionName = responseType === "voice" ? "record_voice" : "record_video_note";
           await fetch(`https://api.telegram.org/bot${token}/sendChatAction`, {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ chat_id: chatId, action: "record_voice" })
+            body: JSON.stringify({ chat_id: chatId, action: actionName })
           }).catch(() => {});
 
-          const voiceBase64 = await generateSpeech(cleanText, settings.voiceResponseName || "Puck");
-          if (voiceBase64) {
-            await sendTelegramVoice(token, chatId, voiceBase64);
+          addSystemLog("info", "api", `Запрос генерации голоса Gemini TTS (Чат ID: ${chatId}, Голос: ${settings.voiceResponseName || "Puck"}, Формат: ${responseType})`);
+          const speechResult = await generateSpeech(cleanText, settings.voiceResponseName || "Puck");
+          if (speechResult) {
+            const rawBuffer = Buffer.from(speechResult.data, "base64");
+            addSystemLog("info", "api", `Получен сырой звук от Gemini TTS (Чат ID: ${chatId}, Размер: ${rawBuffer.length} байт)`);
+
+            // 1. Send Video Note if configured
+            if (responseType === "video_note" || responseType === "both") {
+              try {
+                addSystemLog("info", "api", `Сборка видеокружка в ffmpeg (Чат ID: ${chatId}, Видео: ${settings.circleVideoUrl || "авто-синтез"})`);
+                const videoNoteBuffer = await convertAudioToVideoNote(rawBuffer, speechResult.mimeType, settings.circleVideoUrl);
+                addSystemLog("info", "api", `Успешная сборка видеокружка MP4 (Чат ID: ${chatId}, Размер: ${videoNoteBuffer.length} байт)`);
+                await sendTelegramVideoNote(token, chatId, videoNoteBuffer);
+              } catch (vidErr: any) {
+                addSystemLog("error", "api", `Ошибка создания видеокружка через ffmpeg (Чат ID: ${chatId}): ${vidErr.message}`, { stack: vidErr.stack });
+              }
+            }
+
+            // 2. Send Voice Note if configured
+            if (responseType === "voice" || responseType === "both") {
+              try {
+                const oggOpusBuffer = await convertAudioToOggOpus(rawBuffer, speechResult.mimeType);
+                addSystemLog("info", "api", `Успешная конвертация в OGG Opus в ffmpeg (Чат ID: ${chatId}, Было: ${rawBuffer.length} B -> Стало: ${oggOpusBuffer.length} B)`);
+                await sendTelegramVoice(token, chatId, oggOpusBuffer);
+              } catch (convErr: any) {
+                addSystemLog("error", "api", `Ошибка конвертации в OGG Opus через ffmpeg (Чат ID: ${chatId}): ${convErr.message}`, { stack: convErr.stack });
+              }
+            }
+          } else {
+            addSystemLog("error", "api", `Gemini TTS не вернул данные аудио (Чат ID: ${chatId})`);
           }
         }
       }
-    } catch (err) {
+    } catch (err: any) {
       console.error("sendVoiceResponseIfNeeded failed:", err);
+      addSystemLog("error", "api", `Исключение в sendVoiceResponseIfNeeded (Чат ID: ${chatId}): ${err.message}`, { stack: err.stack });
     }
   }
 
@@ -612,25 +751,209 @@ async function startServer() {
     }
   }
 
+  function makeProgressBar(current: number, total: number, length: number = 10): string {
+    const safeTotal = Math.max(1, total);
+    const ratio = Math.min(1, Math.max(0, current / safeTotal));
+    const filledLength = Math.round(ratio * length);
+    const emptyLength = length - filledLength;
+    const fillBar = "▓".repeat(filledLength);
+    const emptyBar = "░".repeat(emptyLength);
+    const percent = Math.round(ratio * 100);
+    return `[${fillBar}${emptyBar}] ${percent}%`;
+  }
+
+  async function renderOrUpdateCrowdfundMessage(
+    token: string,
+    chatId: string,
+    cf: GroupCrowdfund,
+    settings: DbSettings
+  ) {
+    const targetStars = cf.targetStars || settings.priceGroupStars || 300;
+    const remainingStars = Math.max(0, targetStars - cf.collectedStars);
+    const percent = Math.min(100, Math.round((cf.collectedStars / targetStars) * 100));
+    const pBar = makeProgressBar(cf.collectedStars, targetStars);
+
+    const contribsText = cf.contributors.length > 0
+      ? cf.contributors.map(c => `• ${c.username ? '@' + c.username : c.firstName || 'Участник'}: **${c.amount} ⭐**`).join('\n')
+      : `_Пока никто не внес вклад. Будьте первым!_`;
+
+    const msgText = `🤝 **ГРУППОВОЙ СБОР НА ПРЕМИУМ (В СКЛАДЧИНУ)**\n\n` +
+      `Любой участник чата может внести вклад звездами ⭐! Как только соберется сумма **${targetStars} ⭐**, **Групповой Премиум (30 дней)** активируется для всей группы.\n\n` +
+      `🎯 **Цель сбора:** **${targetStars} ⭐**\n` +
+      `📊 **Собрано:** **${cf.collectedStars} / ${targetStars} ⭐** (${percent}%)\n` +
+      `${pBar}\n` +
+      (remainingStars > 0 ? `💡 **Осталось собрать:** **${remainingStars} ⭐**\n\n` : `🎉 **Цель достигнута!**\n\n`) +
+      `👥 **Вкладчики группы:**\n${contribsText}\n\n` +
+      (remainingStars > 0 ? `👇 **Выберите сумму вклада звездами:**` : `✅ **Премиум активирован!**`);
+
+    const buttons: any[] = [];
+    if (remainingStars > 0) {
+      const quickButtons: any[] = [];
+      if (remainingStars >= 25) quickButtons.push({ text: "➕ 25 ⭐", callback_data: `cf_pay_${chatId}_25` });
+      if (remainingStars >= 50) quickButtons.push({ text: "➕ 50 ⭐", callback_data: `cf_pay_${chatId}_50` });
+      if (remainingStars >= 100) quickButtons.push({ text: "➕ 100 ⭐", callback_data: `cf_pay_${chatId}_100` });
+      if (quickButtons.length > 0) buttons.push(quickButtons);
+
+      if (remainingStars !== 25 && remainingStars !== 50 && remainingStars !== 100) {
+        buttons.push([
+          { text: `⚡️ Оплатить остаток (${remainingStars} ⭐)`, callback_data: `cf_pay_${chatId}_${remainingStars}` }
+        ]);
+      }
+      buttons.push([
+        { text: `👑 Оплатить сразу полностью (${targetStars} ⭐)`, callback_data: `pay_stars_group_single` },
+        { text: "🔄 Обновить статус", callback_data: `cf_refresh_${chatId}` }
+      ]);
+    } else {
+      buttons.push([
+        { text: "🔄 Обновить статус", callback_data: `cf_refresh_${chatId}` }
+      ]);
+    }
+    buttons.push([
+      { text: "🔙 Назад к тарифам", callback_data: "cmd_premium" }
+    ]);
+
+    const inlineKeyboard = { inline_keyboard: buttons };
+
+    if (cf.messageId) {
+      const res = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          chat_id: chatId,
+          message_id: cf.messageId,
+          text: msgText,
+          parse_mode: "Markdown",
+          reply_markup: inlineKeyboard
+        })
+      }).catch(() => null);
+      if (res && res.ok) return;
+    }
+
+    const sentRes = await sendTelegramMessage(token, chatId, msgText, {
+      parse_mode: "Markdown",
+      reply_markup: inlineKeyboard
+    });
+    if (sentRes && sentRes.result && sentRes.result.message_id) {
+      dbInstance.updateCrowdfundMessageId(chatId, sentRes.result.message_id);
+    }
+  }
+
   // Helper helper to send Telegram photo
-  async function sendTelegramPhoto(token: string, chatId: string | number, photoUrl: string, caption: string, extra: any = {}) {
+  async function sendTelegramPhoto(token: string, chatId: string | number, photoInput: string, caption: string, extra: any = {}) {
     try {
-      addSystemLog("info", "api", `Отправка sendPhoto в Telegram (Чат ID: ${chatId})`, { photoUrl, caption, extra });
+      addSystemLog("info", "api", `Отправка sendPhoto в Telegram (Чат ID: ${chatId})`, { photoInput, caption, extra });
+
+      let photoBuffer: Buffer | null = null;
+      let filename = "photo.jpg";
+
+      // 1. Check if photoInput is a Data URL (data:image/png;base64,...)
+      if (photoInput && photoInput.startsWith("data:image/")) {
+        const matches = photoInput.match(/^data:image\/([a-zA-C0-9]+);base64,(.+)$/i);
+        if (matches) {
+          const ext = matches[1] || "jpg";
+          filename = `photo.${ext}`;
+          photoBuffer = Buffer.from(matches[2], "base64");
+        }
+      }
+
+      // 2. Check if photoInput is a local file path (e.g. /uploads/xyz.png)
+      if (!photoBuffer && photoInput) {
+        let localPath = "";
+        if (photoInput.startsWith("/uploads/")) {
+          localPath = path.join(process.cwd(), "public", photoInput);
+        } else if (photoInput.startsWith("uploads/")) {
+          localPath = path.join(process.cwd(), "public", photoInput);
+        } else if (photoInput.startsWith("/")) {
+          localPath = path.join(process.cwd(), "public", photoInput);
+        }
+
+        if (localPath && fs.existsSync(localPath)) {
+          photoBuffer = fs.readFileSync(localPath);
+          filename = path.basename(localPath);
+        }
+      }
+
+      // 3. If photoBuffer exists (from local file or base64), upload as multipart form-data
+      if (photoBuffer) {
+        const formData = new FormData();
+        formData.append("chat_id", String(chatId));
+        if (caption) formData.append("caption", caption);
+
+        const blob = new Blob([photoBuffer], { type: "image/jpeg" });
+        formData.append("photo", blob, filename);
+
+        for (const [key, val] of Object.entries(extra)) {
+          if (val !== undefined && val !== null) {
+            formData.append(key, typeof val === "object" ? JSON.stringify(val) : String(val));
+          }
+        }
+
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+          method: "POST",
+          body: formData
+        });
+        const data = await res.json();
+        if (!data.ok) {
+          addSystemLog("error", "api", `Ошибка ответа Telegram API (sendPhoto multipart) для чата ${chatId}`, data);
+        } else {
+          addSystemLog("info", "api", `Фото (файл/buffer) успешно доставлено в Telegram (Чат ID: ${chatId})`, data);
+        }
+        return data;
+      }
+
+      // 4. Otherwise send photo as URL via JSON
+      const cleanUrl = ensureValidUrl(photoInput);
       const res = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           chat_id: chatId,
-          photo: photoUrl,
+          photo: cleanUrl,
           caption: caption,
           ...extra
         })
       });
       const data = await res.json();
       if (!data.ok) {
-        addSystemLog("error", "api", `Ошибка ответа Telegram API (sendPhoto) для чата ${chatId}`, data);
-        
-        // Fail-safe retry
+        addSystemLog("error", "api", `Ошибка ответа Telegram API (sendPhoto URL) для чата ${chatId}`, data);
+
+        // Fallback A: If Telegram failed to fetch the URL, download it on server and upload directly
+        if (cleanUrl.startsWith("http://") || cleanUrl.startsWith("https://")) {
+          try {
+            addSystemLog("info", "api", `Попытка скачать фото по URL на сервере и переотправить бинарно: ${cleanUrl}`);
+            const imgRes = await fetch(cleanUrl, { headers: { "User-Agent": "Mozilla/5.0" } });
+            if (imgRes.ok) {
+              const arrayBuf = await imgRes.arrayBuffer();
+              const downloadedBuffer = Buffer.from(arrayBuf);
+
+              const formData = new FormData();
+              formData.append("chat_id", String(chatId));
+              if (caption) formData.append("caption", caption);
+              const blob = new Blob([downloadedBuffer], { type: "image/jpeg" });
+              formData.append("photo", blob, "photo.jpg");
+
+              for (const [key, val] of Object.entries(extra)) {
+                if (val !== undefined && val !== null) {
+                  formData.append(key, typeof val === "object" ? JSON.stringify(val) : String(val));
+                }
+              }
+
+              const retryRes = await fetch(`https://api.telegram.org/bot${token}/sendPhoto`, {
+                method: "POST",
+                body: formData
+              });
+              const retryData = await retryRes.json();
+              if (retryData.ok) {
+                addSystemLog("info", "api", `Фото успешно доставлено через серверное скачивание (Чат ID: ${chatId})`, retryData);
+                return retryData;
+              }
+            }
+          } catch (dlErr: any) {
+            console.error("Failed to download image fallback:", dlErr);
+          }
+        }
+
+        // Fallback B: If error was "can't parse entities", retry without parse_mode
         if (data.description && data.description.includes("can't parse entities") && extra.parse_mode) {
           const fallbackExtra = { ...extra };
           delete fallbackExtra.parse_mode;
@@ -640,7 +963,7 @@ async function startServer() {
             headers: { "Content-Type": "application/json" },
             body: JSON.stringify({
               chat_id: chatId,
-              photo: photoUrl,
+              photo: cleanUrl,
               caption: caption,
               ...fallbackExtra
             })
@@ -662,6 +985,8 @@ async function startServer() {
     if (!url) return "";
     let trimmed = url.trim();
     if (!trimmed) return "";
+    if (trimmed.startsWith("data:")) return trimmed;
+    if (trimmed.startsWith("/")) return trimmed;
     if (!/^https?:\/\//i.test(trimmed)) {
       trimmed = "https://" + trimmed;
     }
@@ -1121,6 +1446,21 @@ async function startServer() {
         return;
       }
 
+      // Handle Telegram Stars Pre-Checkout Query
+      if (update.pre_checkout_query) {
+        const pcq = update.pre_checkout_query;
+        addSystemLog("info", "webhook", `Получен pre_checkout_query Telegram Stars (ID: ${pcq.id}, Сумма: ${pcq.total_amount} Stars)`);
+        await fetch(`https://api.telegram.org/bot${token}/answerPreCheckoutQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            pre_checkout_query_id: pcq.id,
+            ok: true
+          })
+        }).catch((err) => console.error("answerPreCheckoutQuery error:", err));
+        return;
+      }
+
     // 1. Handle incoming message
     if (update.message) {
       const message = update.message;
@@ -1133,6 +1473,109 @@ async function startServer() {
       const firstName = from.first_name || "";
       const lastName = from.last_name || "";
 
+      // Handle Telegram Stars Successful Payment
+      if (message.successful_payment) {
+        const sp = message.successful_payment;
+        addSystemLog("info", "webhook", `Успешный платеж за ⭐ Звезды (Чат: ${chatId}, Stars: ${sp.total_amount}, Payload: ${sp.invoice_payload})`);
+
+        const payload = sp.invoice_payload || "";
+
+        // Crowdfunding payment
+        if (payload.startsWith("stars_cf:")) {
+          const parts = payload.split(":");
+          const targetChatId = parts[1] || String(chatId);
+          const amountPaid = Number(parts[2]) || sp.total_amount;
+          const paymentId = parts[3];
+
+          if (paymentId) {
+            dbInstance.succeedPayment(paymentId);
+          }
+
+          const targetStars = settings.priceGroupStars || 300;
+          const res = dbInstance.addCrowdfundContribution(
+            targetChatId,
+            userId,
+            username,
+            firstName,
+            amountPaid,
+            targetStars
+          );
+
+          if (res.isCompleted) {
+            dbInstance.updateGroupPremium(targetChatId, message.chat.title || "Группа", 30);
+            
+            const contribList = res.crowdfund.contributors
+              .map(c => `• ${c.username ? '@' + c.username : c.firstName || 'Участник'}: **${c.amount} ⭐**`)
+              .join("\n");
+
+            const celebrateText = `🎉 **ГРУППОВОЙ ПРЕМИУМ УСПЕШНО ОПЛАЧЕН И АКТИВИРОВАН!**\n\n` +
+              `Сбор завершен! Собрано **${res.crowdfund.collectedStars} / ${res.crowdfund.targetStars} ⭐**.\n\n` +
+              `👏 **Большое спасибо всем вкладчикам:**\n${contribList}\n\n` +
+              `🚀 Бот активирован для ВСЕХ участников этой группы на 30 дней без лимитов!`;
+
+            await sendTelegramMessage(token, targetChatId, celebrateText, { parse_mode: "Markdown" });
+            dbInstance.resetCrowdfund(targetChatId);
+          } else {
+            const remaining = Math.max(0, res.crowdfund.targetStars - res.crowdfund.collectedStars);
+            const percent = Math.round((res.crowdfund.collectedStars / res.crowdfund.targetStars) * 100);
+            const pBar = makeProgressBar(res.crowdfund.collectedStars, res.crowdfund.targetStars);
+
+            const notifyText = `🎉 **${username ? '@' + username : firstName}** внес вклад **+${amountPaid} ⭐** в Групповой Премиум!\n\n` +
+              `📊 **Собрано:** **${res.crowdfund.collectedStars} / ${res.crowdfund.targetStars} ⭐** (${percent}%)\n` +
+              `${pBar}\n` +
+              `💡 **Осталось собрать:** **${remaining} ⭐**`;
+
+            await sendTelegramMessage(token, targetChatId, notifyText, { parse_mode: "Markdown" });
+
+            await renderOrUpdateCrowdfundMessage(token, targetChatId, res.crowdfund, settings);
+          }
+          return;
+        }
+
+        const parts = payload.split(":");
+        const paymentId = parts[1];
+        const plan = parts[2] || "mega";
+        const targetChatId = parts[3] || String(chatId);
+
+        if (paymentId) {
+          dbInstance.succeedPayment(paymentId);
+        }
+
+        if (plan === "group" || String(targetChatId).startsWith("-")) {
+          dbInstance.updateGroupPremium(String(targetChatId), message.chat.title || "Группа", 30);
+          await sendTelegramMessage(token, chatId, `🎉 **ГРУППОВОЙ ПРЕМИУМ АКТИВИРОВАН!**\n\nСпасибо за оплату ⭐ **${sp.total_amount} Звезд**!\n\nТеперь бот работает для ВСЕХ участников в этом чате без лимитов и с подддержкой всех генераций! 🚀`);
+        } else {
+          const days = plan === "base" ? 7 : plan === "ultra" ? 90 : 30;
+          const planName = plan === "base" ? "БАЗОВЫЙ 👑" : plan === "ultra" ? "УЛЬТРА ⚡️" : "МЕГА 🔥";
+          
+          let u = dbInstance.findUser(userId);
+          if (!u) {
+            u = dbInstance.createUser({
+              id: userId,
+              username,
+              firstName,
+              lastName,
+              gender: "M",
+              onboardingCompleted: true,
+              isPremium: true,
+              premiumType: plan as any,
+              premiumUntil: new Date(Date.now() + days * 24 * 3600 * 1000).toISOString()
+            });
+          } else {
+            const currentExpiry = u.premiumUntil ? new Date(u.premiumUntil).getTime() : Date.now();
+            const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
+            dbInstance.updateUser(userId, {
+              isPremium: true,
+              premiumType: plan as any,
+              premiumUntil: new Date(baseTime + days * 24 * 3600 * 1000).toISOString()
+            });
+          }
+
+          await sendTelegramMessage(token, chatId, `🎉 **ОПЛАТА ЗВЕЗДАМИ ПРОШЛА УСПЕШНО!**\n\nВам активирован Премиум тариф **"${planName}"** на **${days} дней**!\n\nСпасибо за покупку! Пользуйтесь ботом без каких-либо ограничений! 🚀👑`);
+        }
+        return;
+      }
+
       let text = message.text || message.caption || "";
       const botUser = settings.tgBotUsername || "NeuroShketBot";
 
@@ -1143,15 +1586,8 @@ async function startServer() {
           let welcomeText = settings.groupMsg?.text || "Всем ку! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут в чате. Отправьте фото или напишите вопрос, тегнув меня!";
           welcomeText = welcomeText.replace(/{bot_username}/g, botUser);
 
-          const rows: any[][] = [];
-          if (settings.groupMsg?.buttons && settings.groupMsg.buttons.length > 0) {
-            for (let i = 0; i < settings.groupMsg.buttons.length; i += 2) {
-              const pair = settings.groupMsg.buttons.slice(i, i + 2);
-              rows.push(pair.map(b => ({ text: b.text, url: b.url })));
-            }
-          }
-          const inlineKeyboard = rows.length > 0 ? { inline_keyboard: rows } : undefined;
-          const extra = inlineKeyboard ? { reply_markup: inlineKeyboard } : {};
+          const inlineKeyboard = buildTemplateKeyboard(settings.groupMsg, botUser);
+          const extra: any = inlineKeyboard ? { reply_markup: inlineKeyboard, parse_mode: "Markdown" } : { parse_mode: "Markdown" };
 
           if (settings.groupMsg?.mediaUrl && settings.groupMsg.mediaUrl.trim().startsWith("http")) {
             await sendTelegramPhoto(token, chatId, settings.groupMsg.mediaUrl.trim(), welcomeText, extra);
@@ -1266,6 +1702,19 @@ async function startServer() {
         return;
       }
 
+      // Record group into DB if in a group
+      if (isGroup) {
+        let g = dbInstance.getGroup(String(chatId));
+        if (!g) {
+          dbInstance.updateGroupPremium(String(chatId), message.chat.title || "Группа", 0);
+        }
+      }
+
+      const isGroupPrem = isGroup ? dbInstance.isGroupPremium(String(chatId)) : false;
+      if (isGroupPrem && !user.isPremium) {
+        user = { ...user, isPremium: true, premiumType: "group" as any };
+      }
+
       // Mandatory Channel Subscription Check (OP)
       const isStartCmd = text && text.startsWith("/start");
       if (settings.requiredChannelUrl && !isStartCmd && !user.isPremium) {
@@ -1357,7 +1806,16 @@ async function startServer() {
               if (lastMsgDate !== today) gdzCount = 0;
 
               if (gdzCount >= settings.freeGdzLimit) {
-                await sendTelegramMessage(token, chatId, `⚠️ Превышен бесплатный лимит ГДЗ: ${settings.freeGdzLimit} задач в день!\n\nКупите подписку /buy для полного безлимита на решение уроков!`);
+                const isGroupChat = isGroup || Number(chatId) < 0;
+                const inlineKeyboard = {
+                  inline_keyboard: [
+                    [{ text: isGroupChat ? "👥 Групповой Премиум" : "👑 Купить Премиум", callback_data: "cmd_premium" }]
+                  ]
+                };
+                const msgText = isGroupChat
+                  ? `⚠️ Превышен бесплатный лимит ГДЗ в группе: ${settings.freeGdzLimit} задач в день!\n\nОформите Групповой Премиум, чтобы вся группа использовала бота без лимитов!`
+                  : `⚠️ Превышен бесплатный лимит ГДЗ: ${settings.freeGdzLimit} задач в день!\n\nКупите подписку /buy для полного безлимита на решение уроков!`;
+                await sendTelegramMessage(token, chatId, msgText, { reply_markup: inlineKeyboard });
                 return;
               }
 
@@ -1491,27 +1949,7 @@ async function startServer() {
 
         let greeting = settings.startMsg?.text || `Здорово! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\n🎒 Панель управления НейроШкЕТа 🎒\nВыбирай нужную функцию прямо на кнопках:`;
 
-        let inlineKeyboard = {
-          inline_keyboard: [
-            [
-              { text: "🎒 Решить ГДЗ", callback_data: "cmd_gdz", style: "danger" },
-              { text: "🎭 Выбрать стиль ИИ", callback_data: "cmd_style", style: "primary" }
-            ],
-            [
-              { text: "➕ Добавить в группу", url: `https://t.me/${botUser}?startgroup=true`, style: "success" }
-            ]
-          ]
-        };
-
-        if (settings.startMsg?.buttons && settings.startMsg.buttons.length > 0) {
-          const rows: any[][] = [];
-          for (let i = 0; i < settings.startMsg.buttons.length; i += 2) {
-            const pair = settings.startMsg.buttons.slice(i, i + 2);
-            rows.push(pair.map(b => ({ text: b.text, url: b.url })));
-          }
-          inlineKeyboard = { inline_keyboard: rows };
-        }
-
+        const inlineKeyboard = buildTemplateKeyboard(settings.startMsg, botUser, DEFAULT_START_BUTTONS);
         const extra: any = { reply_markup: inlineKeyboard, parse_mode: "Markdown" };
 
         if (settings.startMsg?.mediaUrl && settings.startMsg.mediaUrl.trim().startsWith("http")) {
@@ -1601,20 +2039,26 @@ async function startServer() {
         const randomQuiz = quizzes[Math.floor(Math.random() * quizzes.length)];
 
         const quizRows: any[][] = [];
+        const numEmojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"];
         for (let i = 0; i < randomQuiz.options.length; i += 2) {
           const row: any[] = [];
+          const label1 = `${numEmojis[i] || `${i + 1})`} ${randomQuiz.options[i]}`;
           row.push({
-            text: randomQuiz.options[i],
+            text: label1,
             callback_data: `quiz_${randomQuiz.id}_${i}`
           });
           if (i + 1 < randomQuiz.options.length) {
+            const label2 = `${numEmojis[i + 1] || `${i + 2})`} ${randomQuiz.options[i + 1]}`;
             row.push({
-              text: randomQuiz.options[i + 1],
+              text: label2,
               callback_data: `quiz_${randomQuiz.id}_${i + 1}`
             });
           }
           quizRows.push(row);
         }
+        quizRows.push([
+          { text: "🏠 Завершить квиз (Главное меню)", callback_data: "cmd_start" }
+        ]);
 
         const inlineKeyboard = {
           inline_keyboard: quizRows
@@ -1678,17 +2122,37 @@ async function startServer() {
         return;
       }
 
-      if (text === "💎 Купить Премиум" || text === "/buy") {
-        const inlineKeyboard = {
-          inline_keyboard: [
-            [{ text: "👑 БАЗОВЫЙ (7 дней) — 199 ₽", callback_data: "buy_base", style: "primary" }],
-            [{ text: "🔥 МЕГА (30 дней) — 399 ₽", callback_data: "buy_mega", style: "success" }],
-            [{ text: "⚡️ УЛЬТРА (90 дней) — 899 ₽", callback_data: "buy_ultra", style: "danger" }]
-          ]
-        };
+      if (text === "💎 Купить Премиум" || text === "/buy" || text === "/premium") {
+        const pBaseRub = settings.priceBaseRub || 199;
+        const pMegaRub = settings.priceMegaRub || 399;
+        const pUltraRub = settings.priceUltraRub || 899;
+        const pGroupRub = settings.priceGroupRub || 599;
 
-        await sendTelegramMessage(token, chatId, `💎 **NeuroShkET PREMIUM**\n\nПолучи неограниченный доступ к ГДЗ и общению с ИИ, увеличенный контекст диалога и возможность создавать собственные стили ИИ!\n\n**Выбери подходящий тариф:**`, {
-          reply_markup: inlineKeyboard
+        const pBaseStars = settings.priceBaseStars || 100;
+        const pMegaStars = settings.priceMegaStars || 200;
+        const pUltraStars = settings.priceUltraStars || 450;
+        const pGroupStars = settings.priceGroupStars || 300;
+
+        let inlineRows: any[][] = [];
+        let msgText = "";
+
+        if (isGroup) {
+          inlineRows = [
+            [{ text: `👥 ГРУППОВОЙ ПРЕМИУМ (30 дн) — ${pGroupRub} ₽ / ${pGroupStars} ⭐`, callback_data: "plan_group" }]
+          ];
+          msgText = `💎 **ГРУППОВОЙ ПРЕМИУМ NeuroShkET**\n\nПокупка подписки для этого чата / группы, чтобы бот работал для **ВСЕХ участников** без лимитов и необходимости индивидуальной оплаты!\n\n**Нажми кнопку ниже для выбора способа оплаты:**`;
+        } else {
+          inlineRows = [
+            [{ text: `👑 БАЗОВЫЙ (7 дней) — ${pBaseRub} ₽ / ${pBaseStars} ⭐`, callback_data: "plan_base" }],
+            [{ text: `🔥 МЕГА (30 дней) — ${pMegaRub} ₽ / ${pMegaStars} ⭐`, callback_data: "plan_mega" }],
+            [{ text: `⚡️ УЛЬТРА (90 дней) — ${pUltraRub} ₽ / ${pUltraStars} ⭐`, callback_data: "plan_ultra" }]
+          ];
+          msgText = `💎 **NeuroShkET PREMIUM**\n\nПолучи неограниченный доступ к ГДЗ и общению с ИИ, увеличенный контекст диалога и снятие всех лимитов!\n\n**Выбери подходящий тариф ниже:**`;
+        }
+
+        await sendTelegramMessage(token, chatId, msgText, {
+          reply_markup: { inline_keyboard: inlineRows },
+          parse_mode: "Markdown"
         });
         return;
       }
@@ -1764,7 +2228,16 @@ async function startServer() {
         }
 
         if (msgCount >= settings.freeMessagesLimit) {
-          await sendTelegramMessage(token, chatId, `⚠️ Превышен бесплатный лимит в ${settings.freeMessagesLimit} сообщений в день!\n\nКупите подписку через кнопку 💎 Купить Премиум, чтобы снять все лимиты!`);
+          const isGroupChat = isGroup || Number(chatId) < 0;
+          const inlineKeyboard = {
+            inline_keyboard: [
+              [{ text: isGroupChat ? "👥 Групповой Премиум" : "👑 Купить Премиум", callback_data: "cmd_premium" }]
+            ]
+          };
+          const msgText = isGroupChat
+            ? `⚠️ Превышен бесплатный лимит в ${settings.freeMessagesLimit} сообщений в день для этой группы!\n\nОформите Групповой Премиум через /buy, чтобы снять все лимиты для всех участников!`
+            : `⚠️ Превышен бесплатный лимит в ${settings.freeMessagesLimit} сообщений в день!\n\nКупите подписку через кнопку 💎 Купить Премиум, чтобы снять все лимиты!`;
+          await sendTelegramMessage(token, chatId, msgText, { reply_markup: inlineKeyboard });
           return;
         }
 
@@ -1887,6 +2360,25 @@ async function startServer() {
         return;
       }
 
+      if (cbData === "cmd_start" || cbData === "cmd_menu") {
+        const botUser = settings.tgBotUsername || "NeuroShketBot";
+        let greeting = settings.startMsg?.text || `Здорово! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\n🎒 Панель управления НейроШкЕТа 🎒\nВыбирай нужную функцию прямо на кнопках:`;
+
+        const inlineKeyboard = buildTemplateKeyboard(settings.startMsg, botUser, DEFAULT_START_BUTTONS);
+
+        await sendTelegramMessage(token, chatId, greeting, {
+          reply_markup: inlineKeyboard,
+          parse_mode: "Markdown"
+        });
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id })
+        }).catch(() => {});
+        return;
+      }
+
       if (cbData === "cmd_quiz") {
         const limitCheck = checkQuizLimit(userId);
         if (limitCheck.isOver) {
@@ -1906,20 +2398,26 @@ async function startServer() {
           const randomQuiz = quizzes[Math.floor(Math.random() * quizzes.length)];
 
           const quizRows: any[][] = [];
+          const numEmojis = ["1️⃣", "2️⃣", "3️⃣", "4️⃣"];
           for (let i = 0; i < randomQuiz.options.length; i += 2) {
             const row: any[] = [];
+            const label1 = `${numEmojis[i] || `${i + 1})`} ${randomQuiz.options[i]}`;
             row.push({
-              text: randomQuiz.options[i],
+              text: label1,
               callback_data: `quiz_${randomQuiz.id}_${i}`
             });
             if (i + 1 < randomQuiz.options.length) {
+              const label2 = `${numEmojis[i + 1] || `${i + 2})`} ${randomQuiz.options[i + 1]}`;
               row.push({
-                text: randomQuiz.options[i + 1],
+                text: label2,
                 callback_data: `quiz_${randomQuiz.id}_${i + 1}`
               });
             }
             quizRows.push(row);
           }
+          quizRows.push([
+            { text: "🏠 Завершить квиз (Главное меню)", callback_data: "cmd_start" }
+          ]);
 
           const inlineKeyboard = {
             inline_keyboard: quizRows
@@ -1985,16 +2483,37 @@ async function startServer() {
       }
 
       if (cbData === "cmd_premium") {
-        const inlineKeyboard = {
-          inline_keyboard: [
-            [{ text: "👑 БАЗОВЫЙ (7 дней) — 199 ₽", callback_data: "buy_base", style: "primary" }],
-            [{ text: "🔥 МЕГА (30 дней) — 399 ₽", callback_data: "buy_mega", style: "success" }],
-            [{ text: "⚡️ УЛЬТРА (90 дней) — 899 ₽", callback_data: "buy_ultra", style: "danger" }]
-          ]
-        };
+        const isGroupInCb = cb.message?.chat?.type === "group" || cb.message?.chat?.type === "supergroup" || Number(chatId) < 0;
+        const pBaseRub = settings.priceBaseRub || 199;
+        const pMegaRub = settings.priceMegaRub || 399;
+        const pUltraRub = settings.priceUltraRub || 899;
+        const pGroupRub = settings.priceGroupRub || 599;
 
-        await sendTelegramMessage(token, chatId, `💎 **NeuroShkET PREMIUM**\n\nПолучи неограниченный доступ к ГДЗ и общению с ИИ, увеличенный контекст диалога и возможность создавать собственные стили ИИ!\n\n**Выбери подходящий тариф:**`, {
-          reply_markup: inlineKeyboard
+        const pBaseStars = settings.priceBaseStars || 100;
+        const pMegaStars = settings.priceMegaStars || 200;
+        const pUltraStars = settings.priceUltraStars || 450;
+        const pGroupStars = settings.priceGroupStars || 300;
+
+        let inlineRows: any[][] = [];
+        let msgText = "";
+
+        if (isGroupInCb) {
+          inlineRows = [
+            [{ text: `👥 ГРУППОВОЙ ПРЕМИУМ (30 дн) — ${pGroupRub} ₽ / ${pGroupStars} ⭐`, callback_data: "plan_group" }]
+          ];
+          msgText = `💎 **ГРУППОВОЙ ПРЕМИУМ NeuroShkET**\n\nПокупка подписки для этого чата / группы, чтобы бот работал для **ВСЕХ участников** без лимитов и необходимости индивидуальной оплаты!\n\n**Нажми кнопку ниже для выбора способа оплаты:**`;
+        } else {
+          inlineRows = [
+            [{ text: `👑 БАЗОВЫЙ (7 дней) — ${pBaseRub} ₽ / ${pBaseStars} ⭐`, callback_data: "plan_base" }],
+            [{ text: `🔥 МЕГА (30 дней) — ${pMegaRub} ₽ / ${pMegaStars} ⭐`, callback_data: "plan_mega" }],
+            [{ text: `⚡️ УЛЬТРА (90 дней) — ${pUltraRub} ₽ / ${pUltraStars} ⭐`, callback_data: "plan_ultra" }]
+          ];
+          msgText = `💎 **NeuroShkET PREMIUM**\n\nПолучи неограниченный доступ к ГДЗ и общению с ИИ, увеличенный контекст диалога и снятие всех лимитов!\n\n**Выбери подходящий тариф ниже:**`;
+        }
+
+        await sendTelegramMessage(token, chatId, msgText, {
+          reply_markup: { inline_keyboard: inlineRows },
+          parse_mode: "Markdown"
         });
 
         await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
@@ -2148,6 +2667,9 @@ async function startServer() {
                 [
                   { text: "📚 Следующий вопрос", callback_data: "cmd_quiz" },
                   { text: "🏆 Общий рейтинг", callback_data: "cmd_leaderboard" }
+                ],
+                [
+                  { text: "🏠 Завершить квиз (Главное меню)", callback_data: "cmd_start" }
                 ]
               ]
             },
@@ -2169,6 +2691,9 @@ async function startServer() {
                 [
                   { text: "📚 Следующий вопрос", callback_data: "cmd_quiz" },
                   { text: "🏆 Общий рейтинг", callback_data: "cmd_leaderboard" }
+                ],
+                [
+                  { text: "🏠 Завершить квиз (Главное меню)", callback_data: "cmd_start" }
                 ]
               ]
             },
@@ -2336,19 +2861,207 @@ async function startServer() {
         return;
       }
 
-      // C. Handle Buy Callback
-      if (cbData.startsWith("buy_")) {
-        const plan = cbData.replace("buy_", "") as "base" | "mega" | "ultra";
-        let amount = 199;
-        if (plan === "mega") amount = 399;
-        if (plan === "ultra") amount = 899;
+      // Plan Selection Callback (Card or Telegram Stars)
+      if (cbData.startsWith("plan_")) {
+        const plan = cbData.replace("plan_", "") as "base" | "mega" | "ultra" | "group";
+        let planTitle = "👑 БАЗОВЫЙ (7 дней)";
+        let pRub = settings.priceBaseRub || 199;
+        let pStars = settings.priceBaseStars || 100;
 
-        const payment = dbInstance.createPayment(userId, user.username || cb.from.first_name, plan, amount);
-        const settings = dbInstance.getSettings();
-        const isRealYookassa = settings.yookassaEnabled || false;
-        const shopId = settings.yookassaShopId;
-        const secretKey = settings.yookassaSecretKey;
-        const botUser = settings.tgBotUsername || "NeuroShketBot";
+        if (plan === "mega") {
+          planTitle = "🔥 МЕГА (30 дней)";
+          pRub = settings.priceMegaRub || 399;
+          pStars = settings.priceMegaStars || 200;
+        } else if (plan === "ultra") {
+          planTitle = "⚡️ УЛЬТРА (90 дней)";
+          pRub = settings.priceUltraRub || 899;
+          pStars = settings.priceUltraStars || 450;
+        } else if (plan === "group") {
+          planTitle = "👥 ГРУППОВОЙ (30 дней для чата)";
+          pRub = settings.priceGroupRub || 599;
+          pStars = settings.priceGroupStars || 300;
+        }
+
+        const inlineKeyboard = {
+          inline_keyboard: [
+            [{ text: `💳 Банковской картой (${pRub} ₽)`, callback_data: `pay_card_${plan}` }],
+            [{ text: `⭐ Звездами Telegram (${pStars} ⭐)`, callback_data: `pay_stars_${plan}` }],
+            [{ text: "🔙 Назад к тарифам", callback_data: "cmd_premium" }]
+          ]
+        };
+
+        await sendTelegramMessage(token, chatId, `💳 **Выбор способа оплаты:**\n\nТариф: **${planTitle}**\n\n- Стоимость картой: **${pRub} ₽**\n- Стоимость в Stars: **${pStars} ⭐**\n\nВыбери удобный способ оплаты ниже:`, {
+          reply_markup: inlineKeyboard,
+          parse_mode: "Markdown"
+        });
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id })
+        }).catch(() => {});
+        return;
+      }
+
+      // Group Stars Payment Menu (Choice between single payment or crowdfunding)
+      if (cbData === "pay_stars_group") {
+        const pGroupStars = settings.priceGroupStars || 300;
+        const inlineKeyboard = {
+          inline_keyboard: [
+            [{ text: `⚡️ Оплатить сразу полностью (1 человек = ${pGroupStars} ⭐)`, callback_data: "pay_stars_group_single" }],
+            [{ text: `🤝 Оплатить в складчину (групповой сбор ⭐)`, callback_data: "pay_stars_group_cf" }],
+            [{ text: "🔙 Назад к тарифам", callback_data: "cmd_premium" }]
+          ]
+        };
+
+        await sendTelegramMessage(token, chatId, `👥 **ГРУППОВОЙ ПРЕМИУМ ЗА ЗВЕЗДЫ ⭐**\n\nСтоимость подписки на 30 дней для всех участников группы: **${pGroupStars} ⭐**\n\nВыберите вариант оплаты:\n• **Оплатить сразу полностью:** Один участник оплачивает всю стоимость (**${pGroupStars} ⭐**).\n• **Оплатить в складчину:** Вклад нескольких участников! Каждый может внести посильную сумму (25, 50, 100 ⭐...), пока не наберется вся сумма.`, {
+          reply_markup: inlineKeyboard,
+          parse_mode: "Markdown"
+        });
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id })
+        }).catch(() => {});
+        return;
+      }
+
+      // Open/Refresh Crowdfund Message
+      if (cbData === "pay_stars_group_cf" || cbData.startsWith("cf_refresh_")) {
+        const targetChatId = cbData.startsWith("cf_refresh_") ? cbData.replace("cf_refresh_", "") : String(chatId);
+        const cf = dbInstance.getCrowdfund(targetChatId, settings.priceGroupStars || 300);
+        await renderOrUpdateCrowdfundMessage(token, targetChatId, cf, settings);
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id, text: "Статус обновлен!" })
+        }).catch(() => {});
+        return;
+      }
+
+      // Crowdfund Payment Invoice Handler
+      if (cbData.startsWith("cf_pay_")) {
+        const parts = cbData.split("_");
+        // cf, pay, targetChatId, amount
+        const targetChatId = parts[2] || String(chatId);
+        const amount = Number(parts[3]) || 25;
+
+        const payment = dbInstance.createPayment(
+          userId,
+          user.username || cb.from.first_name,
+          "group",
+          0,
+          "stars",
+          amount,
+          targetChatId
+        );
+
+        const payload = `stars_cf:${targetChatId}:${amount}:${payment.id}`;
+
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendInvoice`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            title: `🤝 Вклад ${amount} ⭐ в Групповой Премиум`,
+            description: `Внесение ${amount} ⭐ в общий сбор Группового Премиума (30 дней)!`,
+            payload: payload,
+            provider_token: "",
+            currency: "XTR",
+            prices: [{ label: `Вклад ${amount} ⭐`, amount: amount }]
+          })
+        });
+
+        const resData = await res.json();
+        if (!resData.ok) {
+          addSystemLog("error", "api", `Ошибка sendInvoice Crowdfund: ${JSON.stringify(resData)}`);
+          await sendTelegramMessage(token, chatId, `⚠️ Ошибка выставления счета на ${amount} ⭐: ${resData.description || "Неизвестная ошибка"}`);
+        }
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id })
+        }).catch(() => {});
+        return;
+      }
+
+      // Telegram Stars Payment Handler
+      if (cbData.startsWith("pay_stars_")) {
+        let plan = cbData.replace("pay_stars_", "") as "base" | "mega" | "ultra" | "group";
+        if (cbData === "pay_stars_group_single") plan = "group";
+
+        let planTitle = "Премиум Тариф БАЗОВЫЙ (7 дн)";
+        let starsAmount = settings.priceBaseStars || 100;
+
+        if (plan === "mega") {
+          planTitle = "Премиум Тариф МЕГА (30 дн)";
+          starsAmount = settings.priceMegaStars || 200;
+        } else if (plan === "ultra") {
+          planTitle = "Премиум Тариф УЛЬТРА (90 дн)";
+          starsAmount = settings.priceUltraStars || 450;
+        } else if (plan === "group") {
+          planTitle = "Групповой Премиум (30 дн)";
+          starsAmount = settings.priceGroupStars || 300;
+        }
+
+        const payment = dbInstance.createPayment(
+          userId,
+          user.username || cb.from.first_name,
+          plan,
+          0,
+          "stars",
+          starsAmount,
+          String(chatId)
+        );
+
+        const payload = `stars_pay:${payment.id}:${plan}:${chatId}`;
+
+        // Send Telegram Stars invoice
+        const res = await fetch(`https://api.telegram.org/bot${token}/sendInvoice`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
+            chat_id: chatId,
+            title: planTitle,
+            description: `Оплата ${planTitle} в Telegram Stars ⭐. Мгновенная активация!`,
+            payload: payload,
+            provider_token: "", // Empty for Telegram Stars
+            currency: "XTR",     // Currency code for Telegram Stars
+            prices: [{ label: planTitle, amount: starsAmount }]
+          })
+        });
+
+        const resData = await res.json();
+        if (!resData.ok) {
+          addSystemLog("error", "api", `Ошибка sendInvoice Telegram Stars: ${JSON.stringify(resData)}`);
+          await sendTelegramMessage(token, chatId, `⚠️ Ошибка отправки счета Telegram Stars: ${resData.description || "Неизвестная ошибка"}`);
+        }
+
+        await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ callback_query_id: cb.id })
+        }).catch(() => {});
+        return;
+      }
+
+      // Card Payment Handler (Yookassa / Manual)
+      if (cbData.startsWith("pay_card_") || cbData.startsWith("buy_")) {
+        const plan = (cbData.startsWith("pay_card_") ? cbData.replace("pay_card_", "") : cbData.replace("buy_", "")) as "base" | "mega" | "ultra" | "group";
+        const currentSettings = dbInstance.getSettings();
+        let amount = currentSettings.priceBaseRub || 199;
+        if (plan === "mega") amount = currentSettings.priceMegaRub || 399;
+        if (plan === "ultra") amount = currentSettings.priceUltraRub || 899;
+        if (plan === "group") amount = currentSettings.priceGroupRub || 599;
+
+        const payment = dbInstance.createPayment(userId, user.username || cb.from.first_name, plan, amount, "card", 0, String(chatId));
+        const isRealYookassa = currentSettings.yookassaEnabled || false;
+        const shopId = currentSettings.yookassaShopId;
+        const secretKey = currentSettings.yookassaSecretKey;
+        const botUser = currentSettings.tgBotUsername || "NeuroShketBot";
         const returnUrl = `https://t.me/${botUser}`;
 
         let checkoutUrl = "";
@@ -2584,7 +3297,10 @@ async function startServer() {
           .replace(/https?:\/\/\S+/g, "")
           .trim();
         if (cleanText) {
-          voiceAudio = await generateSpeech(cleanText, settings.voiceResponseName || "Puck");
+          const speechResult = await generateSpeech(cleanText, settings.voiceResponseName || "Puck");
+          if (speechResult) {
+            voiceAudio = speechResult.data;
+          }
         }
       }
     } catch (err) {
@@ -3111,6 +3827,30 @@ async function startServer() {
   // Get Payments list
   app.get("/api/admin/payments", (req, res) => {
     res.json(dbInstance.getPayments());
+  });
+
+  // Get Groups list
+  app.get("/api/admin/groups", (req, res) => {
+    res.json(dbInstance.getGroups());
+  });
+
+  // Update Group Premium
+  app.post("/api/admin/groups/premium", (req, res) => {
+    const { chatId, title, isPremium, days } = req.body;
+    if (!chatId) return res.status(400).json({ error: "Chat ID is required" });
+
+    if (isPremium) {
+      const g = dbInstance.updateGroupPremium(String(chatId), title || "Группа", days || 30);
+      res.json(g);
+    } else {
+      let g = dbInstance.getGroup(String(chatId));
+      if (g) {
+        g.isPremium = false;
+        g.premiumUntil = null;
+        dbInstance.save();
+      }
+      res.json(g || { chatId, isPremium: false });
+    }
   });
 
   // Get Broadcast newsletters

@@ -77,12 +77,45 @@ export interface DbStyle {
   isPremium?: boolean;
 }
 
+export interface RequiredChannel {
+  name: string;
+  url: string;
+}
+
+export interface GroupContributor {
+  userId: string;
+  username: string;
+  firstName?: string;
+  amount: number;
+  paidAt: string;
+}
+
+export interface GroupCrowdfund {
+  messageId?: number;
+  targetStars: number;
+  collectedStars: number;
+  contributors: GroupContributor[];
+  updatedAt: string;
+}
+
+export interface DbGroup {
+  chatId: string;
+  title: string;
+  isPremium: boolean;
+  premiumUntil: string | null;
+  addedAt: string;
+  crowdfund?: GroupCrowdfund;
+}
+
 export interface DbPayment {
   id: string;
   userId: string;
   username: string;
   amount: number;
-  plan: "base" | "mega" | "ultra";
+  plan: "base" | "mega" | "ultra" | "group";
+  method?: "card" | "stars";
+  starsAmount?: number;
+  chatId?: string;
   status: "pending" | "succeeded" | "failed";
   createdAt: string;
 }
@@ -102,15 +135,33 @@ export interface DbBroadcast {
   createdAt: string;
 }
 
+export interface TemplateButton {
+  text: string;
+  type?: "cmd_gdz" | "cmd_style" | "startgroup" | "cmd_quiz" | "cmd_joke" | "cmd_premium" | "cmd_profile" | "cmd_ref" | "url";
+  url?: string;
+  callbackData?: string;
+  row?: number;
+}
+
 export interface BotMessageTemplate {
   text: string;
   mediaUrl?: string;
-  buttons?: { text: string; url: string }[];
+  buttonsInRow?: number;
+  buttons?: TemplateButton[];
 }
 
 export interface DbSettings {
   requiredChannelUrl: string;
   requiredChannelName: string;
+  requiredChannels?: RequiredChannel[];
+  priceBaseRub?: number;
+  priceMegaRub?: number;
+  priceUltraRub?: number;
+  priceGroupRub?: number;
+  priceBaseStars?: number;
+  priceMegaStars?: number;
+  priceUltraStars?: number;
+  priceGroupStars?: number;
   freeMessagesLimit: number;
   premiumMessagesLimit: number;
   freeGdzLimit: number;
@@ -142,6 +193,8 @@ export interface DbSettings {
   totalMessagesChat?: number;
   groupRandomReplyChance?: number;
   voiceResponsesMode?: "disabled" | "always" | "premium";
+  voiceResponseType?: "voice" | "video_note" | "both";
+  circleVideoUrl?: string;
   voiceResponseName?: string;
 }
 
@@ -153,6 +206,7 @@ export interface DbSchema {
   quizResults: DbQuizResult[];
   styles: DbStyle[];
   payments: DbPayment[];
+  groups?: DbGroup[];
   broadcasts: DbBroadcast[];
   settings: DbSettings;
   messages: { [userId: string]: { role: "user" | "model"; text: string; timestamp: string }[] };
@@ -444,11 +498,23 @@ export class Database {
           quizResults: parsed.quizResults || [],
           styles: parsed.styles || defaultStyles,
           payments: parsed.payments || defaultPayments,
+          groups: parsed.groups || [],
           broadcasts: parsed.broadcasts || [],
           messages: parsed.messages || {},
           settings: {
             requiredChannelUrl: "https://t.me/shket_official",
             requiredChannelName: "ШкЕТ Official",
+            requiredChannels: [
+              { name: "ШкЕТ Official", url: "https://t.me/shket_official" }
+            ],
+            priceBaseRub: 199,
+            priceMegaRub: 399,
+            priceUltraRub: 899,
+            priceGroupRub: 599,
+            priceBaseStars: 100,
+            priceMegaStars: 200,
+            priceUltraStars: 450,
+            priceGroupStars: 300,
             freeMessagesLimit: 10,
             premiumMessagesLimit: 9999,
             freeGdzLimit: 3,
@@ -474,11 +540,18 @@ export class Database {
             geminiApiKey: "",
             tgApiBaseUrl: "",
             voiceResponsesMode: "disabled",
+            voiceResponseType: "video_note",
+            circleVideoUrl: "",
             voiceResponseName: "Puck",
             startMsg: {
               text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
               mediaUrl: "",
-              buttons: []
+              buttonsInRow: 2,
+              buttons: [
+                { text: "🎒 Решить ГДЗ", type: "cmd_gdz", callbackData: "cmd_gdz" },
+                { text: "🎭 Выбрать стиль ИИ", type: "cmd_style", callbackData: "cmd_style" },
+                { text: "➕ Добавить в группу", type: "startgroup", url: "" }
+              ]
             },
             groupMsg: {
               text: "Всем ку! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут в чате. Отправьте фото или напишите вопрос, тегнув меня!",
@@ -563,7 +636,12 @@ export class Database {
         startMsg: {
           text: "Привет! На связи ШкЕТ 🎒. Спрашивай чё угодно — я шарю за любую домашку и могу знатно поугарать над твоими преподшами. Будет жарко!\n\nВыбирай нужную функцию прямо на кнопках:",
           mediaUrl: "",
-          buttons: []
+          buttonsInRow: 2,
+          buttons: [
+            { text: "🎒 Решить ГДЗ", type: "cmd_gdz", callbackData: "cmd_gdz" },
+            { text: "🎭 Выбрать стиль ИИ", type: "cmd_style", callbackData: "cmd_style" },
+            { text: "➕ Добавить в группу", type: "startgroup", url: "" }
+          ]
         },
         groupMsg: {
           text: "Всем ку! Я НейроШкЕТ 🎒. Буду помогать вам с домашкой прямо тут в чате. Отправьте фото или напишите вопрос, тегнув меня!",
@@ -876,14 +954,153 @@ export class Database {
     return false;
   }
 
+  // Groups
+  public getGroup(chatId: string): DbGroup | undefined {
+    if (!this.data.groups) this.data.groups = [];
+    return this.data.groups.find((g) => String(g.chatId) === String(chatId));
+  }
+
+  public getGroups(): DbGroup[] {
+    if (!this.data.groups) this.data.groups = [];
+    return this.data.groups;
+  }
+
+  public isGroupPremium(chatId: string): boolean {
+    const group = this.getGroup(chatId);
+    if (!group || !group.isPremium) return false;
+    if (!group.premiumUntil) return true;
+    return new Date(group.premiumUntil).getTime() > Date.now();
+  }
+
+  public updateGroupPremium(chatId: string, title: string = "Группа", days: number = 30): DbGroup {
+    if (!this.data.groups) this.data.groups = [];
+    let group = this.getGroup(chatId);
+    const currentExpiry = group && group.premiumUntil ? new Date(group.premiumUntil).getTime() : Date.now();
+    const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
+    const newExpiry = new Date(baseTime + days * 24 * 3600 * 1000).toISOString();
+
+    if (group) {
+      group.title = title || group.title;
+      group.isPremium = true;
+      group.premiumUntil = newExpiry;
+    } else {
+      group = {
+        chatId,
+        title,
+        isPremium: true,
+        premiumUntil: newExpiry,
+        addedAt: new Date().toISOString()
+      };
+      this.data.groups.push(group);
+    }
+    this.save();
+    return group;
+  }
+
+  public getCrowdfund(chatId: string, defaultTargetStars: number = 300): GroupCrowdfund {
+    let group = this.getGroup(chatId);
+    if (!group) {
+      group = this.updateGroupPremium(chatId, "Группа", 0);
+      group.isPremium = false;
+      group.premiumUntil = null;
+    }
+    if (!group.crowdfund) {
+      group.crowdfund = {
+        targetStars: defaultTargetStars,
+        collectedStars: 0,
+        contributors: [],
+        updatedAt: new Date().toISOString()
+      };
+      this.save();
+    } else if (defaultTargetStars && group.crowdfund.targetStars !== defaultTargetStars) {
+      group.crowdfund.targetStars = defaultTargetStars;
+    }
+    return group.crowdfund;
+  }
+
+  public updateCrowdfundMessageId(chatId: string, messageId: number): void {
+    const group = this.getGroup(chatId);
+    if (group && group.crowdfund) {
+      group.crowdfund.messageId = messageId;
+      this.save();
+    }
+  }
+
+  public addCrowdfundContribution(
+    chatId: string,
+    userId: string,
+    username: string,
+    firstName: string,
+    amount: number,
+    targetStars: number = 300
+  ): { isCompleted: boolean; crowdfund: GroupCrowdfund; group: DbGroup } {
+    let group = this.getGroup(chatId);
+    if (!group) {
+      group = this.updateGroupPremium(chatId, "Группа", 0);
+      group.isPremium = false;
+      group.premiumUntil = null;
+    }
+    if (!group.crowdfund) {
+      group.crowdfund = {
+        targetStars,
+        collectedStars: 0,
+        contributors: [],
+        updatedAt: new Date().toISOString()
+      };
+    }
+
+    group.crowdfund.targetStars = targetStars;
+    group.crowdfund.collectedStars += amount;
+    group.crowdfund.updatedAt = new Date().toISOString();
+
+    let contrib = group.crowdfund.contributors.find(c => String(c.userId) === String(userId));
+    if (contrib) {
+      contrib.amount += amount;
+      contrib.username = username || contrib.username;
+      contrib.firstName = firstName || contrib.firstName;
+      contrib.paidAt = new Date().toISOString();
+    } else {
+      group.crowdfund.contributors.push({
+        userId: String(userId),
+        username,
+        firstName,
+        amount,
+        paidAt: new Date().toISOString()
+      });
+    }
+
+    const isCompleted = group.crowdfund.collectedStars >= group.crowdfund.targetStars;
+    this.save();
+    return { isCompleted, crowdfund: group.crowdfund, group };
+  }
+
+  public resetCrowdfund(chatId: string): void {
+    const group = this.getGroup(chatId);
+    if (group && group.crowdfund) {
+      delete group.crowdfund;
+      this.save();
+    }
+  }
+
   // Payments
-  public createPayment(userId: string, username: string, plan: "base" | "mega" | "ultra", amount: number): DbPayment {
+  public createPayment(
+    userId: string,
+    username: string,
+    plan: "base" | "mega" | "ultra" | "group",
+    amount: number,
+    method: "card" | "stars" = "card",
+    starsAmount?: number,
+    chatId?: string
+  ): DbPayment {
     const newPayment: DbPayment = {
       id: "pay_" + Math.random().toString(36).substr(2, 9),
       userId,
       username,
       amount,
       plan,
+      method,
+      starsAmount,
+      chatId,
       status: "pending",
       createdAt: new Date().toISOString(),
     };
@@ -896,20 +1113,26 @@ export class Database {
     const p = this.data.payments.find((pay) => pay.id === id);
     if (p) {
       p.status = "succeeded";
-      const u = this.findUser(p.userId);
-      if (u) {
-        let days = 7;
-        if (p.plan === "mega") days = 30;
-        if (p.plan === "ultra") days = 90;
+      if (p.plan === "group" || p.chatId) {
+        if (p.chatId) {
+          this.updateGroupPremium(p.chatId, "Группа", 30);
+        }
+      } else {
+        const u = this.findUser(p.userId);
+        if (u) {
+          let days = 7;
+          if (p.plan === "mega") days = 30;
+          if (p.plan === "ultra") days = 90;
 
-        const currentExpiry = u.premiumUntil ? new Date(u.premiumUntil).getTime() : Date.now();
-        const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
-        const newExpiry = new Date(baseTime + days * 24 * 3600 * 1000).toISOString();
+          const currentExpiry = u.premiumUntil ? new Date(u.premiumUntil).getTime() : Date.now();
+          const baseTime = currentExpiry > Date.now() ? currentExpiry : Date.now();
+          const newExpiry = new Date(baseTime + days * 24 * 3600 * 1000).toISOString();
 
-        u.isPremium = true;
-        u.premiumType = p.plan;
-        u.premiumUntil = newExpiry;
-        this.updateUser(u.id, u);
+          u.isPremium = true;
+          u.premiumType = p.plan as any;
+          u.premiumUntil = newExpiry;
+          this.updateUser(u.id, u);
+        }
       }
       this.save();
     }

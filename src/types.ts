@@ -64,12 +64,28 @@ export interface DbStyle {
   isPremium?: boolean;
 }
 
+export interface RequiredChannel {
+  name: string;
+  url: string;
+}
+
+export interface DbGroup {
+  chatId: string;
+  title: string;
+  isPremium: boolean;
+  premiumUntil: string | null;
+  addedAt: string;
+}
+
 export interface DbPayment {
   id: string;
   userId: string;
   username: string;
   amount: number;
-  plan: "base" | "mega" | "ultra";
+  plan: "base" | "mega" | "ultra" | "group";
+  method?: "card" | "stars";
+  starsAmount?: number;
+  chatId?: string;
   status: "pending" | "succeeded" | "failed";
   createdAt: string;
 }
@@ -89,15 +105,33 @@ export interface DbBroadcast {
   createdAt: string;
 }
 
+export interface TemplateButton {
+  text: string;
+  type?: "cmd_gdz" | "cmd_style" | "startgroup" | "cmd_quiz" | "cmd_joke" | "cmd_premium" | "cmd_profile" | "cmd_ref" | "url";
+  url?: string;
+  callbackData?: string;
+  row?: number;
+}
+
 export interface BotMessageTemplate {
   text: string;
   mediaUrl?: string;
-  buttons?: { text: string; url: string }[];
+  buttonsInRow?: number;
+  buttons?: TemplateButton[];
 }
 
 export interface DbSettings {
   requiredChannelUrl: string;
   requiredChannelName: string;
+  requiredChannels?: RequiredChannel[];
+  priceBaseRub?: number;
+  priceMegaRub?: number;
+  priceUltraRub?: number;
+  priceGroupRub?: number;
+  priceBaseStars?: number;
+  priceMegaStars?: number;
+  priceUltraStars?: number;
+  priceGroupStars?: number;
   freeMessagesLimit: number;
   premiumMessagesLimit: number;
   freeGdzLimit: number;
@@ -126,6 +160,8 @@ export interface DbSettings {
   totalMessagesChat?: number;
   groupRandomReplyChance?: number;
   voiceResponsesMode?: "disabled" | "always" | "premium";
+  voiceResponseType?: "voice" | "video_note" | "both";
+  circleVideoUrl?: string;
   voiceResponseName?: string;
 }
 
